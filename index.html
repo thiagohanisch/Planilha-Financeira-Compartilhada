@@ -1,9 +1,9 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Planilha Financeira Compartilhada</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>FinTrack</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -1088,8 +1088,25 @@ async function loadAll(){
     _imports=impsR?JSON.parse(impsR):[];
     _fbUrl=fbR||'';
     await migrateDoacaoToExpense();
+    await migrateExpenseAmounts();
     await migrateOwnerField();
   }catch{}
+}
+
+// Migração: o sistema trabalha com despesas armazenadas como valores positivos.
+// Planilhas antigas podem trazer despesas negativas; isso fazia o cálculo
+// "receita - despesa" somar a despesa ao saldo. A correção abaixo também
+// atualiza os dados já salvos no navegador/Firebase.
+async function migrateExpenseAmounts(){
+  let changed=false;
+  _db.transactions.forEach(t=>{
+    const numericAmount=Number(t.amount);
+    if(!Number.isFinite(numericAmount))return;
+    const normalizedAmount=t.type==='expense'?Math.abs(numericAmount):numericAmount;
+    if(t.amount!==normalizedAmount){t.amount=normalizedAmount;changed=true}
+  });
+  if(changed)await saveDBAndSync(_db);
+  return changed;
 }
 
 // Migração: dados criados antes da existência de perfis (Thiago/Luiza) não têm "owner".
@@ -1332,11 +1349,13 @@ function updateSharedPreview(){
 
 async function saveTransaction(){
   const desc=document.getElementById('f-desc').value.trim();
-  const amount=parseFloat(document.getElementById('f-amount').value);
+  const rawAmount=parseFloat(document.getElementById('f-amount').value);
   const date=document.getElementById('f-date').value;
   const cat=document.getElementById('f-cat').value;
-  if(!desc||!date||isNaN(amount)||amount===0){alert('Preencha todos os campos.');return}
-  if(currentType==='expense'&&amount<0){alert('Despesas devem ter valor positivo.');return}
+  if(!desc||!date||isNaN(rawAmount)||rawAmount===0){alert('Preencha todos os campos.');return}
+  // Despesas são sempre armazenadas como valor positivo.
+  // O sinal negativo é aplicado apenas na exibição e no cálculo do saldo.
+  const amount=currentType==='expense'?Math.abs(rawAmount):rawAmount;
   if(!cat){alert('Selecione uma categoria.');return}
   const db=loadDB();
   const editingId=document.getElementById('f-editing-id').value;
@@ -1417,8 +1436,8 @@ function updateDashboard(){
   const year=parseInt(document.getElementById('dash-year')?.value??now.getFullYear());
   document.getElementById('dash-period-label').textContent=MONTHS[month]+' de '+year+viewSuffix();
   const db=visibleDB(),txs=filterTx(db.transactions,month,year);
-  const income=txs.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);
-  const expense=txs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+  const income=txs.filter(t=>t.type==='income').reduce((s,t)=>s+(Number(t.amount)||0),0);
+  const expense=txs.filter(t=>t.type==='expense').reduce((s,t)=>s+Math.abs(Number(t.amount)||0),0);
   const balance=income-expense;
   document.getElementById('c-income').textContent=fmt(income);
   document.getElementById('c-income-count').textContent=txs.filter(t=>t.type==='income').length+' entrada(s)';
@@ -1427,7 +1446,7 @@ function updateDashboard(){
   document.getElementById('c-balance').textContent=fmt(balance);
   document.getElementById('c-balance').style.color=balance>=0?'var(--green)':'var(--red)';
   document.getElementById('c-balance-pct').textContent=income>0?'Poupança: '+Math.round((balance/income)*100)+'%':'—';
-  const catMap={};txs.filter(t=>t.type==='expense').forEach(t=>{catMap[t.category]=(catMap[t.category]||0)+t.amount});
+  const catMap={};txs.filter(t=>t.type==='expense').forEach(t=>{catMap[t.category]=(catMap[t.category]||0)+Math.abs(Number(t.amount)||0)});
   const top=Object.entries(catMap).sort((a,b)=>b[1]-a[1])[0];
   if(top){const c=getCat(top[0]);document.getElementById('c-topcat').textContent=c.icon+' '+c.name;document.getElementById('c-topcat-amt').textContent=fmt(top[1])}
   else{document.getElementById('c-topcat').textContent='—';document.getElementById('c-topcat-amt').textContent='Sem despesas'}
@@ -1787,7 +1806,7 @@ function handleFile(file){
         if(!row){skipped.push(idx);return}
         const rawDate=row[cDia],rawTipo=String(row[cTipo]||'').trim(),rawDept=String(row[cDept]||'').trim(),rawValor=row[cValor],rawDesc=String(row[cDesc]||'').trim();
         if(!rawDate||rawValor==null||isNaN(Number(rawValor))){skipped.push(idx);return}
-        const rawNum=Number(rawValor),amount=rawNum;if(amount===0){skipped.push(idx);return}
+        const rawNum=Number(rawValor);if(rawNum===0){skipped.push(idx);return}
         let dateStr='';
         if(rawDate instanceof Date&&!isNaN(rawDate)){dateStr=`${rawDate.getFullYear()}-${String(rawDate.getMonth()+1).padStart(2,'0')}-${String(rawDate.getDate()).padStart(2,'0')}`}
         else if(typeof rawDate==='number'){const d=new Date(Math.round((rawDate-25569)*86400*1000));if(!isNaN(d))dateStr=d.toISOString().split('T')[0]}
@@ -1798,6 +1817,9 @@ function handleFile(file){
         const deptN=norm(rawDept);
         // Doação é sempre despesa, independente do tipo marcado na planilha
         if(/doa[cç][aã]o/.test(deptN)) type='expense';
+        // A planilha pode representar saídas com sinal negativo. Internamente,
+        // despesas precisam permanecer positivas para o saldo usar receita - despesa.
+        const amount=type==='expense'?Math.abs(rawNum):rawNum;
         let catId=null;
         // Apenas correspondência EXATA (normalizada) — evita confundir categorias parecidas
         // como "Receber" vs "Recebidos" ou "Presente" vs "Presentes"
