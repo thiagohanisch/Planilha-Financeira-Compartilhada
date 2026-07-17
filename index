@@ -1778,7 +1778,7 @@ function handleFile(file){
       for(let i=0;i<Math.min(10,rows.length);i++){const r=rows[i];if(r.some(c=>c&&/^dia$|^data$/i.test(String(c).trim()))&&r.some(c=>c&&/^valor$/i.test(String(c).trim()))){hi=i;break}}
       const hdr=rows[hi].map(c=>String(c||'').toLowerCase().trim());
       let cDia=-1,cTipo=-1,cDept=-1,cValor=-1,cDesc=-1;
-      hdr.forEach((h,i)=>{if(/^dia$|^data$/.test(h))cDia=i;else if(/^valor$/.test(h))cValor=i;else if(/departamento|categoria/.test(h))cDept=i;else if(/descri/.test(h))cDesc=i;else if((h===''||h==='unnamed')&&cTipo===-1)cTipo=i});
+      hdr.forEach((h,i)=>{if(/^dia$|^data$/.test(h))cDia=i;else if(/^valor$/.test(h))cValor=i;else if(/departamento|categoria/.test(h))cDept=i;else if(/descri/.test(h))cDesc=i;else if(/^tipo$/.test(h))cTipo=i;else if((h===''||h==='unnamed')&&cTipo===-1)cTipo=i});
       if(cDia<0)cDia=0;if(cTipo<0)cTipo=1;if(cDept<0)cDept=2;if(cValor<0)cValor=3;if(cDesc<0)cDesc=4;
       const dataRows=rows.slice(hi+1),parsed=[],skipped=[],newCatMap={};
       const cats=loadCats(),allEx=[...cats.expense,...cats.income];
