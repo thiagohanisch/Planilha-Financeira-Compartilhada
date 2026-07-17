@@ -1652,9 +1652,48 @@ async function saveTransaction(){
   const db=loadDB();
   const existing=editingId?db.transactions.find(t=>t.id===editingId):null;
   const isParceled=document.getElementById('f-parceled').checked&&!editingId;
-  const isShared=document.getElementById('f-shared').checked&&!isParceled;
+  const isShared=document.getElementById('f-shared').checked;
 
-  if(isShared){
+  if(isShared&&isParceled){
+    const minePct=parseFloat(document.getElementById('f-shared-mine-pct').value)||0;
+    const partnerPct=parseFloat(document.getElementById('f-shared-partner-pct').value)||0;
+    if(Math.abs((minePct+partnerPct)-100)>0.01){alert('A divisão precisa somar 100%.');return}
+    const n=parseInt(document.getElementById('f-parcelas').value)||2;
+    if(n<2||n>120){alert('Número de parcelas deve ser entre 2 e 120.');return}
+
+    const owner=_currentProfile;
+    const partner=otherProfile(owner);
+    const paidBy=owner;
+    const parcelaGroup='parc_'+Date.now().toString(36);
+    const baseDate=new Date(date+'T12:00');
+    let totalParcelado=0;
+
+    for(let i=0;i<n;i++){
+      const d=new Date(baseDate);
+      d.setMonth(d.getMonth()+i);
+      const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      // A última parcela absorve eventual diferença de centavos para preservar o total exato.
+      const parcelaTotal=i===n-1?parseFloat((amount-totalParcelado).toFixed(2)):parseFloat((amount/n).toFixed(2));
+      totalParcelado=parseFloat((totalParcelado+parcelaTotal).toFixed(2));
+      const ownerAmount=parseFloat((parcelaTotal*minePct/100).toFixed(2));
+      const partnerAmount=parseFloat((parcelaTotal-ownerAmount).toFixed(2));
+      const sharedGroup='sh_'+Date.now().toString(36)+'_'+i+'_'+Math.random().toString(36).slice(2,7);
+      const installmentDescription=`${desc} (${i+1}/${n})`;
+
+      db.transactions.unshift({
+        id:Date.now().toString()+Math.random().toString(36).slice(2),
+        type:currentType,description:installmentDescription,amount:ownerAmount,date:ds,category:cat,
+        owner,shared:true,groupId:sharedGroup,sharedTotal:parcelaTotal,splitPct:minePct,paidBy,
+        parcelaGroup,parcelaNum:i+1,parcelaTotal:n
+      });
+      db.transactions.unshift({
+        id:Date.now().toString()+Math.random().toString(36).slice(2),
+        type:currentType,description:installmentDescription,amount:partnerAmount,date:ds,category:cat,
+        owner:partner,shared:true,groupId:sharedGroup,sharedTotal:parcelaTotal,splitPct:partnerPct,paidBy,
+        parcelaGroup,parcelaNum:i+1,parcelaTotal:n
+      });
+    }
+  } else if(isShared){
     const minePct=parseFloat(document.getElementById('f-shared-mine-pct').value)||0;
     const partnerPct=parseFloat(document.getElementById('f-shared-partner-pct').value)||0;
     if(Math.abs((minePct+partnerPct)-100)>0.01){alert('A divisão precisa somar 100%.');return}
@@ -1663,7 +1702,7 @@ async function saveTransaction(){
     const groupId=existing?.groupId||('sh_'+Date.now().toString(36));
     const paidBy=existing?.paidBy||owner;
     const ownerAmount=parseFloat((amount*minePct/100).toFixed(2));
-    const partnerAmount=parseFloat((amount*partnerPct/100).toFixed(2));
+    const partnerAmount=parseFloat((amount-ownerAmount).toFixed(2));
 
     if(existing){
       const idx=db.transactions.findIndex(t=>t.id===editingId);
