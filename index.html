@@ -882,14 +882,23 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 
 <!-- ZERAR DADOS -->
 <section id="sec-reset" class="section">
-  <div class="page-header"><div><div class="page-title">Zerar Dados</div><div class="page-sub">Apague transações, categorias ou tudo</div></div></div>
+  <div class="page-header"><div><div class="page-title">Zerar Dados</div><div class="page-sub">Apague os dados de Thiago ou Luiza separadamente</div></div></div>
+  <div class="chart-card" style="max-width:600px;margin-bottom:16px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div><div style="font-size:14px;font-weight:600">Dados de quem serão apagados?</div><div style="font-size:12px;color:var(--text2);margin-top:3px">A exclusão não afetará os dados do outro perfil.</div></div>
+      <select class="period-select" id="reset-owner" onchange="renderResetSection()">
+        <option value="thiago">Thiago</option>
+        <option value="luiza">Luiza</option>
+      </select>
+    </div>
+  </div>
   <div style="display:grid;gap:16px;max-width:600px">
     <div class="chart-card" style="border-color:rgba(245,101,101,0.2)">
       <div style="display:flex;align-items:flex-start;gap:14px">
         <div style="font-size:32px">📋</div>
         <div style="flex:1">
-          <div style="font-size:15px;font-weight:600;margin-bottom:4px">Apagar todas as transações</div>
-          <div style="font-size:13px;color:var(--text2);margin-bottom:14px">Remove todos os lançamentos. As categorias são mantidas.</div>
+          <div style="font-size:15px;font-weight:600;margin-bottom:4px" id="reset-tx-title">Apagar transações</div>
+          <div style="font-size:13px;color:var(--text2);margin-bottom:14px" id="reset-tx-desc">Remove apenas os lançamentos do perfil selecionado. As categorias são mantidas.</div>
           <div style="background:var(--bg3);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text2);margin-bottom:14px" id="reset-tx-count">—</div>
           <button class="btn btn-danger" onclick="resetTransactions()">🗑 Apagar transações</button>
         </div>
@@ -899,8 +908,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       <div style="display:flex;align-items:flex-start;gap:14px">
         <div style="font-size:32px">🏷️</div>
         <div style="flex:1">
-          <div style="font-size:15px;font-weight:600;margin-bottom:4px">Remover categorias personalizadas</div>
-          <div style="font-size:13px;color:var(--text2);margin-bottom:14px">Remove apenas as categorias criadas ou importadas. As padrão são mantidas.</div>
+          <div style="font-size:15px;font-weight:600;margin-bottom:4px">Remover categorias personalizadas compartilhadas</div>
+          <div style="font-size:13px;color:var(--text2);margin-bottom:14px">As categorias são compartilhadas entre Thiago e Luiza. Esta ação afeta os dois perfis; as categorias padrão são mantidas.</div>
           <div style="background:var(--bg3);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text2);margin-bottom:14px" id="reset-cats-count">—</div>
           <button class="btn" onclick="resetCustomCats()" style="background:rgba(251,191,36,0.1);border-color:rgba(251,191,36,0.3);color:var(--amber)">🏷 Remover criadas</button>
         </div>
@@ -910,8 +919,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       <div style="display:flex;align-items:flex-start;gap:14px">
         <div style="font-size:32px">📥</div>
         <div style="flex:1">
-          <div style="font-size:15px;font-weight:600;margin-bottom:4px">Limpar histórico de importações</div>
-          <div style="font-size:13px;color:var(--text2);margin-bottom:14px">Apaga o registro de arquivos importados. Não remove transações.</div>
+          <div style="font-size:15px;font-weight:600;margin-bottom:4px" id="reset-imp-title">Limpar histórico de importações</div>
+          <div style="font-size:13px;color:var(--text2);margin-bottom:14px">Apaga somente o histórico do perfil selecionado. Não remove transações.</div>
           <div style="background:var(--bg3);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text2);margin-bottom:14px" id="reset-imp-count">—</div>
           <button class="btn" onclick="resetImportHistory()">🧹 Limpar histórico</button>
         </div>
@@ -921,8 +930,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       <div style="display:flex;align-items:flex-start;gap:14px">
         <div style="font-size:32px">⚠️</div>
         <div style="flex:1">
-          <div style="font-size:15px;font-weight:600;margin-bottom:4px;color:var(--red)">Apagar tudo</div>
-          <div style="font-size:13px;color:var(--text2);margin-bottom:14px">Remove <strong style="color:var(--text)">tudo</strong>. Categorias padrão são restauradas. <strong style="color:var(--red)">Irreversível.</strong></div>
+          <div style="font-size:15px;font-weight:600;margin-bottom:4px;color:var(--red)" id="reset-all-title">Apagar todos os dados do perfil</div>
+          <div style="font-size:13px;color:var(--text2);margin-bottom:14px" id="reset-all-desc">Remove todas as transações e o histórico de importações do perfil selecionado. Os dados do outro perfil e as categorias compartilhadas são preservados. <strong style="color:var(--red)">Irreversível.</strong></div>
           <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);cursor:pointer;margin-bottom:14px"><input type="checkbox" id="confirm-reset-all" style="accent-color:var(--red)"> Entendo que esta ação não pode ser desfeita</label>
           <button class="btn btn-danger" onclick="resetAll()">⚠️ Apagar tudo</button>
         </div>
@@ -2134,7 +2143,7 @@ async function confirmImport(){
   pendingImport.forEach(t=>{if(skipDup&&existingIds.has(t.id)){dupes++;return}db.transactions.push(t);existingIds.add(t.id);added++});
   db.transactions.sort((a,b)=>new Date(b.date)-new Date(a.date));
   await saveDBAndSync(db);
-  const history=loadImports();history.unshift({date:new Date().toISOString(),added,dupes,total:pendingImport.length});
+  const history=loadImports();history.unshift({date:new Date().toISOString(),added,dupes,total:pendingImport.length,owner:importOwner});
   await saveImports(history.slice(0,20));
   btn.textContent='✓ Importar';btn.disabled=false;
   alert(`✓ ${added} transações adicionadas${dupes?' ('+dupes+' duplicatas ignoradas)':''}.`);
@@ -2304,36 +2313,62 @@ async function syncFromCloud(){
 function logCloud(msg){const el=document.getElementById('cloud-log');if(el)el.innerHTML=msg+'<br>'+el.innerHTML}
 
 // ===================== RESET =====================
+function getResetOwner(){
+  const sel=document.getElementById('reset-owner');
+  return sel?.value||_currentProfile||'thiago';
+}
+function importBelongsToOwner(item,owner){
+  // Históricos antigos não tinham proprietário; pertencem ao Thiago,
+  // pois a base original existia antes da criação dos perfis.
+  return (item?.owner||'thiago')===owner;
+}
 function renderResetSection(){
   const db=loadDB(),cats=loadCats(),imps=loadImports();
+  const sel=document.getElementById('reset-owner');
+  if(sel&&!sel.dataset.initialized){sel.value=_currentProfile||'thiago';sel.dataset.initialized='1'}
+  const owner=getResetOwner(),ownerName=profileName(owner);
+  const ownerTx=db.transactions.filter(t=>(t.owner||'thiago')===owner);
+  const ownerImps=imps.filter(i=>importBelongsToOwner(i,owner));
   const cExp=cats.expense.filter(c=>!c.builtin).length,cInc=cats.income.filter(c=>!c.builtin).length;
-  const tc=db.transactions.length,ti=db.transactions.filter(t=>t.type==='income').length,te=db.transactions.filter(t=>t.type==='expense').length;
-  const txEl=document.getElementById('reset-tx-count');if(txEl)txEl.innerHTML=tc?`<strong style="color:var(--text)">${tc}</strong> transações — <span style="color:var(--green)">${ti} receitas</span> · <span style="color:var(--red)">${te} despesas</span>`:'Nenhuma transação.';
-  const catEl=document.getElementById('reset-cats-count');if(catEl)catEl.innerHTML=(cExp+cInc)?`<strong style="color:var(--text)">${cExp+cInc}</strong> personalizadas — ${cExp} despesa · ${cInc} receita`:'Nenhuma personalizada.';
-  const impEl=document.getElementById('reset-imp-count');if(impEl)impEl.innerHTML=imps.length?`<strong style="color:var(--text)">${imps.length}</strong> importação(ões)`:'Histórico vazio.';
+  const tc=ownerTx.length,ti=ownerTx.filter(t=>t.type==='income').length,te=ownerTx.filter(t=>t.type==='expense').length;
+  const txEl=document.getElementById('reset-tx-count');if(txEl)txEl.innerHTML=tc?`<strong style="color:var(--text)">${tc}</strong> transações de ${ownerName} — <span style="color:var(--green)">${ti} receitas</span> · <span style="color:var(--red)">${te} despesas</span>`:`Nenhuma transação de ${ownerName}.`;
+  const catEl=document.getElementById('reset-cats-count');if(catEl)catEl.innerHTML=(cExp+cInc)?`<strong style="color:var(--text)">${cExp+cInc}</strong> personalizadas compartilhadas — ${cExp} despesa · ${cInc} receita`:'Nenhuma personalizada.';
+  const impEl=document.getElementById('reset-imp-count');if(impEl)impEl.innerHTML=ownerImps.length?`<strong style="color:var(--text)">${ownerImps.length}</strong> importação(ões) de ${ownerName}`:`Histórico de ${ownerName} vazio.`;
+  const txTitle=document.getElementById('reset-tx-title');if(txTitle)txTitle.textContent=`Apagar transações de ${ownerName}`;
+  const impTitle=document.getElementById('reset-imp-title');if(impTitle)impTitle.textContent=`Limpar histórico de ${ownerName}`;
+  const allTitle=document.getElementById('reset-all-title');if(allTitle)allTitle.textContent=`Apagar todos os dados de ${ownerName}`;
   const cb=document.getElementById('confirm-reset-all');if(cb)cb.checked=false;
 }
 async function resetTransactions(){
-  const db=loadDB();if(!db.transactions.length){alert('Não há transações.');return}
-  if(!confirm(`Apagar ${db.transactions.length} transações?`))return;
-  await saveDBAndSync({transactions:[]});populateAllSelects();renderResetSection();refreshAll();alert('✓ Transações apagadas.');
+  const owner=getResetOwner(),ownerName=profileName(owner),db=loadDB();
+  const count=db.transactions.filter(t=>(t.owner||'thiago')===owner).length;
+  if(!count){alert(`Não há transações de ${ownerName}.`);return}
+  if(!confirm(`Apagar ${count} transações de ${ownerName}?\n\nOs dados de ${profileName(otherProfile(owner))} serão preservados.`))return;
+  db.transactions=db.transactions.filter(t=>(t.owner||'thiago')!==owner);
+  await saveDBAndSync(db);populateAllSelects();renderResetSection();refreshAll();alert(`✓ Transações de ${ownerName} apagadas.`);
 }
 async function resetCustomCats(){
   const cats=loadCats(),total=cats.expense.filter(c=>!c.builtin).length+cats.income.filter(c=>!c.builtin).length;
   if(!total){alert('Nenhuma categoria personalizada.');return}
-  if(!confirm(`Remover ${total} categoria(s)?`))return;
+  if(!confirm(`Remover ${total} categoria(s) compartilhada(s)?\n\nEsta ação afeta Thiago e Luiza.`))return;
   cats.expense=cats.expense.filter(c=>c.builtin);cats.income=cats.income.filter(c=>c.builtin);
-  await saveCats(cats);renderResetSection();renderCatManager();alert('✓ Categorias removidas.');
+  await saveCats(cats);renderResetSection();renderCatManager();alert('✓ Categorias compartilhadas removidas.');
 }
 async function resetImportHistory(){
-  if(!loadImports().length){alert('Histórico já vazio.');return}
-  if(!confirm('Limpar histórico?'))return;await saveImports([]);renderResetSection();alert('✓ Histórico limpo.');
+  const owner=getResetOwner(),ownerName=profileName(owner),history=loadImports();
+  const count=history.filter(i=>importBelongsToOwner(i,owner)).length;
+  if(!count){alert(`Histórico de ${ownerName} já está vazio.`);return}
+  if(!confirm(`Limpar ${count} registro(s) de importação de ${ownerName}?`))return;
+  await saveImports(history.filter(i=>!importBelongsToOwner(i,owner)));renderResetSection();alert(`✓ Histórico de ${ownerName} limpo.`);
 }
 async function resetAll(){
   const cb=document.getElementById('confirm-reset-all');if(!cb?.checked){alert('Marque a confirmação.');return}
-  if(!confirm('Apagar TUDO? Irreversível.'))return;
-  await saveDBAndSync({transactions:[]});await saveCats(JSON.parse(JSON.stringify(DEFAULT_CATS)));await saveImports([]);
-  populateAllSelects();renderResetSection();refreshAll();alert('✓ Tudo apagado.');
+  const owner=getResetOwner(),ownerName=profileName(owner),otherName=profileName(otherProfile(owner));
+  if(!confirm(`Apagar todas as transações e o histórico de ${ownerName}?\n\nOs dados de ${otherName} serão preservados. Esta ação é irreversível.`))return;
+  const db=loadDB();db.transactions=db.transactions.filter(t=>(t.owner||'thiago')!==owner);
+  const history=loadImports().filter(i=>!importBelongsToOwner(i,owner));
+  await saveDBAndSync(db);await saveImports(history);
+  populateAllSelects();renderResetSection();refreshAll();alert(`✓ Dados de ${ownerName} apagados. Os dados de ${otherName} foram preservados.`);
 }
 
 // ===================== REFRESH =====================
