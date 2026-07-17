@@ -67,6 +67,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .tx-btn:hover{background:var(--bg4)}
 .btn{padding:7px 14px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:var(--bg3);color:var(--text);font-size:12px;font-weight:500;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all .15s;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
 .btn:hover{background:var(--bg4)}
+.btn:disabled{opacity:.45;cursor:not-allowed;background:var(--bg3);color:var(--text3);border-color:var(--border)}
+.btn:disabled:hover{background:var(--bg3)}
 .btn-primary{background:var(--green);color:#0f1117;border-color:var(--green)}
 .btn-primary:hover{background:#1ab88c}
 .btn-danger{background:var(--red-bg);color:var(--red);border-color:rgba(245,101,101,.3)}
@@ -184,11 +186,25 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .pat-table td:first-child{text-align:left;font-family:'DM Sans',sans-serif;font-weight:500;color:var(--text)}
 .pat-table tr:last-child td{border-bottom:none}
 .pat-table tr.highlight-year td{background:rgba(34,211,160,0.06)}
+
+.pat-curve-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-sm);margin-top:14px}
+.pat-curve-table{width:100%;border-collapse:collapse;font-size:12px}
+.pat-curve-table th{padding:9px 12px;background:var(--bg3);color:var(--text2);font-weight:500;text-align:left;white-space:nowrap}
+.pat-curve-table td{padding:8px 12px;border-top:1px solid var(--border);vertical-align:middle}
+.pat-curve-input{width:96px;padding:7px 9px;background:var(--bg3);border:1px solid var(--border2);border-radius:7px;color:var(--text);font-family:'DM Mono',monospace;font-size:12px;outline:none}
+.pat-curve-input:focus{border-color:var(--green)}
+.pat-source-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:20px;font-size:10.5px;white-space:nowrap;background:var(--bg3);color:var(--text2);border:1px solid var(--border)}
+.pat-source-chip.focus{background:var(--green-bg);color:var(--green);border-color:rgba(34,211,160,.28)}
+.pat-source-chip.manual{background:rgba(251,191,36,.08);color:var(--amber);border-color:rgba(251,191,36,.25)}
+.pat-focus-meta{font-size:11px;color:var(--text3);margin-top:4px;line-height:1.5}
+
 .pat-excluded-cats{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .cmp-badge{display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:2px 8px;border-radius:20px;font-weight:500}
 .cmp-up{background:rgba(34,211,160,0.15);color:var(--green)}
 .cmp-down{background:rgba(245,101,101,0.15);color:var(--red)}
 .cmp-flat{background:var(--bg3);color:var(--text3)}
+.evolution-summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;max-width:760px;margin:0 auto 24px}
+.evolution-summary-grid .card{padding:16px 18px}
 .cmp-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:20px}
 .cmp-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
 .cmp-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
@@ -218,6 +234,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .mobile-bar-inner{display:flex;justify-content:space-around}
 .mob-btn{display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 12px;cursor:pointer;color:var(--text3);font-size:10px;border-radius:8px;transition:color .15s;border:none;background:none}
 .mob-btn.active{color:var(--green)}
+.mob-btn:disabled{opacity:.35;cursor:not-allowed}
 .mob-btn .mob-icon{font-size:18px}
 @media(max-width:768px){
   :root{--sidebar:0px}
@@ -231,6 +248,12 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
   .form-row-2{grid-template-columns:1fr}
   .mobile-bar{display:block}
   .insights-grid{grid-template-columns:repeat(2,1fr)}
+  .evolution-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr));max-width:none}
+  .evolution-summary-grid .card:last-child{grid-column:1/-1}
+}
+@media(max-width:480px){
+  .evolution-summary-grid{grid-template-columns:1fr}
+  .evolution-summary-grid .card:last-child{grid-column:auto}
 }
 @media(min-width:769px) and (max-width:1024px){
   :root{--sidebar:60px}
@@ -310,7 +333,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
     <div class="hdr-actions">
       <select class="period-select" id="dash-month" onchange="updateDashboard()"></select>
       <select class="period-select" id="dash-year" onchange="updateDashboard()"></select>
-      <button class="btn btn-primary" onclick="openModal()">+ <span>Nova transação</span></button>
+      <button class="btn btn-primary" id="btn-new-dashboard" onclick="openModal()">+ <span>Nova transação</span></button>
     </div>
   </div>
   <div class="cards-grid">
@@ -347,7 +370,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 <section id="sec-transacoes" class="section">
   <div class="page-header">
     <div><div class="page-title">Transações</div><div class="page-sub" id="tx-count-label">—</div></div>
-    <button class="btn btn-primary" onclick="openModal()">+ <span>Nova transação</span></button>
+    <button class="btn btn-primary" id="btn-new-transactions" onclick="openModal()">+ <span>Nova transação</span></button>
   </div>
 
   <!-- Filtros visuais -->
@@ -384,7 +407,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       <select class="period-select" id="ev-year" onchange="renderEvolucao()"></select>
     </div>
   </div>
-  <div class="cards-grid" style="grid-template-columns:repeat(3,1fr)">
+  <div class="evolution-summary-grid">
     <div class="card"><div class="card-label">Melhor mês (receita)</div><div class="card-value" id="ev-best-income" style="color:var(--green);font-size:16px">—</div><div class="card-sub" id="ev-best-income-val">—</div></div>
     <div class="card"><div class="card-label">Pior mês (despesa)</div><div class="card-value" id="ev-worst-expense" style="color:var(--red);font-size:16px">—</div><div class="card-sub" id="ev-worst-expense-val">—</div></div>
     <div class="card"><div class="card-label">Saldo acumulado</div><div class="card-value" id="ev-accumulated">R$ 0</div><div class="card-sub" id="ev-accumulated-sub">—</div></div>
@@ -418,6 +441,14 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
   <div class="page-header">
     <div><div class="page-title">Comparativo</div><div class="page-sub" id="cmp-subtitle">Período atual vs ano anterior</div></div>
     <div class="hdr-actions">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2)">
+        <span>Visualizar</span>
+        <select class="period-select" id="cmp-owner" onchange="renderComparativo()">
+          <option value="thiago">Thiago</option>
+          <option value="luiza">Luiza</option>
+          <option value="casal">Casal</option>
+        </select>
+      </label>
       <select class="period-select" id="cmp-mode" onchange="renderComparativo()">
         <option value="ytd">Acumulado no ano (Jan–mês atual)</option>
         <option value="month">Mês específico</option>
@@ -664,8 +695,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
       <div style="font-size:14px;font-weight:500">Parâmetros da projeção</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <span id="pat-selic-badge" class="pat-api-badge pat-api-load">⏳ Buscando SELIC...</span>
-        <span id="pat-ipca-badge" class="pat-api-badge pat-api-load">⏳ Buscando IPCA...</span>
+        <span id="pat-selic-badge" class="pat-api-badge pat-api-load">⏳ Buscando curva Focus...</span>
+        <span id="pat-ipca-badge" class="pat-api-badge pat-api-load">⏳ Aguardando IPCA...</span>
       </div>
     </div>
 
@@ -677,34 +708,56 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       </div>
       <div class="pat-field">
         <label>📅 Horizonte de projeção (anos)</label>
-        <input class="pat-input" id="pat-anos" type="number" min="1" max="50" value="10" placeholder="Ex: 10">
-        <span class="pat-input-hint">Quantos anos quer projetar</span>
+        <input class="pat-input" id="pat-anos" type="number" min="1" max="50" value="10" placeholder="Ex: 10" onchange="renderPatCurve()">
+        <span class="pat-input-hint">A curva será aplicada ano a ano</span>
       </div>
       <div class="pat-field">
-        <label>📈 SELIC anual projetada (%)</label>
-        <input class="pat-input" id="pat-selic" type="number" step="0.01" placeholder="Buscando...">
-        <span class="pat-input-hint" id="pat-selic-hint">Buscando Boletim Focus...</span>
+        <label>📈 Rentabilidade do investimento (% da SELIC)</label>
+        <input class="pat-input" id="pat-selic-pct" type="number" step="1" min="0" value="100" placeholder="Ex: 100">
+        <span class="pat-input-hint">Ex.: 100% da SELIC ou 110% da SELIC</span>
       </div>
       <div class="pat-field">
-        <label>📊 IPCA anual projetado (%)</label>
-        <input class="pat-input" id="pat-ipca" type="number" step="0.01" placeholder="Buscando...">
-        <span class="pat-input-hint" id="pat-ipca-hint">Buscando Boletim Focus...</span>
+        <label>🧭 SELIC de longo prazo (%)</label>
+        <input class="pat-input" id="pat-selic-long" type="number" step="0.01" value="8.00" onchange="renderPatCurve()">
+        <span class="pat-input-hint">Usada após o último ano disponível no Focus</span>
+      </div>
+      <div class="pat-field">
+        <label>📊 IPCA de longo prazo (%)</label>
+        <input class="pat-input" id="pat-ipca-long" type="number" step="0.01" value="3.50" onchange="renderPatCurve()">
+        <span class="pat-input-hint">Usado após o último ano disponível no Focus</span>
       </div>
       <div class="pat-field">
         <label>⬆ Crescimento anual de receita (%)</label>
         <input class="pat-input" id="pat-cresc-rec" type="number" step="0.1" value="3" placeholder="Ex: 3">
-        <span class="pat-input-hint">Ex: aumento de salário esperado</span>
+        <span class="pat-input-hint">Ex.: aumento de salário esperado</span>
       </div>
       <div class="pat-field">
         <label>⬇ Crescimento anual de despesa (%)</label>
         <input class="pat-input" id="pat-cresc-desp" type="number" step="0.1" value="4" placeholder="Ex: 4">
-        <span class="pat-input-hint">Ex: inflação sobre seus gastos</span>
+        <span class="pat-input-hint">Ex.: inflação sobre seus gastos</span>
       </div>
       <div class="pat-field">
         <label>➕ Aporte extra mensal (R$)</label>
         <input class="pat-input" id="pat-aporte" type="number" step="0.01" value="0" placeholder="0">
         <span class="pat-input-hint">Depósito adicional todo mês</span>
       </div>
+    </div>
+
+    <div style="background:var(--bg3);border-radius:var(--radius-sm);padding:14px 16px;margin:4px 0 16px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div>
+          <div style="font-size:12px;color:var(--text2);font-weight:500">Curva anual utilizada no cálculo</div>
+          <div class="pat-focus-meta" id="pat-focus-meta">Carregando projeções do Boletim Focus...</div>
+        </div>
+        <button class="btn" type="button" onclick="reloadFocusProjection()">↻ Atualizar projeções</button>
+      </div>
+      <div class="pat-curve-wrap">
+        <table class="pat-curve-table">
+          <thead><tr><th>Ano</th><th>SELIC projetada</th><th>IPCA projetado</th><th>Origem</th></tr></thead>
+          <tbody id="pat-curve-tbody"><tr><td colspan="4" style="color:var(--text3)">Carregando...</td></tr></tbody>
+        </table>
+      </div>
+      <div class="pat-focus-meta">As taxas podem ser editadas. Para anos sem projeção oficial, o sistema usa as premissas de longo prazo informadas acima.</div>
     </div>
 
     <!-- Receita e despesa base calculadas -->
@@ -744,7 +797,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
   </div>
 
   <!-- Gráfico -->
-  <div class="chart-card" style="margin-bottom:18px" id="pat-chart-card" style="display:none">
+  <div class="chart-card" id="pat-chart-card" style="display:none;margin-bottom:18px">
     <div class="chart-header">
       <div class="chart-title">Evolução patrimonial projetada</div>
       <div class="legend">
@@ -983,6 +1036,8 @@ function checkPassword(){
   if(val===PROFILES[_pendingProfile].password){
     _currentProfile=_pendingProfile;
     _viewOwner=_currentProfile; // por padrão, cada um entra vendo a própria área
+    const cmpOwnerSel=document.getElementById('cmp-owner');
+    if(cmpOwnerSel)cmpOwnerSel.value=_currentProfile;
     localStorage.setItem(DEVICE_PROFILE_KEY,_currentProfile);
     document.getElementById('lock-screen').style.display='none';
     document.getElementById('app-root').style.display='flex';
@@ -1058,6 +1113,16 @@ function updateProfileUI(){
     el.style.borderColor=active?'var(--green)':'var(--border2)';
     el.style.fontWeight=active?'600':'400';
   });
+  updateTransactionCreationState();
+}
+function updateTransactionCreationState(){
+  const blocked=_viewOwner==='casal';
+  ['btn-new-dashboard','btn-new-transactions','mob-add'].forEach(id=>{
+    const el=document.getElementById(id);if(!el)return;
+    el.disabled=blocked;
+    el.title=blocked?'Selecione Thiago ou Luiza para registrar uma transação.':'';
+    el.setAttribute('aria-disabled',blocked?'true':'false');
+  });
 }
 function viewSuffix(){
   if(_viewOwner==='casal')return ' · Casal';
@@ -1065,15 +1130,20 @@ function viewSuffix(){
 }
 function setViewOwner(v){
   _viewOwner=v;
+  if(v==='casal'&&!document.getElementById('f-editing-id')?.value)closeModal();
   updateProfileUI();
   refreshAll();
 }
 
+function getTxByOwner(owner){
+  const all=_db.transactions;
+  if(owner==='casal')return all;
+  return all.filter(t=>t.owner===owner);
+}
+
 // retorna as transações visíveis de acordo com a visão selecionada (Meu/Dela/Casal)
 function getVisibleTx(){
-  const all=_db.transactions;
-  if(_viewOwner==='casal')return all;
-  return all.filter(t=>t.owner===_viewOwner);
+  return getTxByOwner(_viewOwner);
 }
 // retorna um "db" com transactions já filtradas pela visão — usar em telas de leitura/relatório
 function visibleDB(){return{transactions:getVisibleTx()}}
@@ -1275,6 +1345,10 @@ function toggleMobileMenu(){document.getElementById('sidebar').classList.toggle(
 // ===================== MODAL =====================
 let currentType='expense';
 function openModal(id){
+  if(!id&&_viewOwner==='casal'){
+    alert('Na visão Casal é possível consultar as transações combinadas, mas não registrar uma nova. Selecione Thiago ou Luiza para continuar.');
+    return;
+  }
   document.getElementById('modal-bg').classList.add('open');
   document.getElementById('modal-title').textContent=id?'Editar transação':'Nova transação';
   document.getElementById('f-editing-id').value=id||'';
@@ -1397,6 +1471,12 @@ function updateSharedPreview(){
 }
 
 async function saveTransaction(){
+  const editingId=document.getElementById('f-editing-id').value;
+  if(!editingId&&_viewOwner==='casal'){
+    alert('Não é possível registrar transações na visão Casal. Selecione Thiago ou Luiza.');
+    closeModal();
+    return;
+  }
   const desc=document.getElementById('f-desc').value.trim();
   const rawAmount=parseFloat(document.getElementById('f-amount').value);
   const date=document.getElementById('f-date').value;
@@ -1407,7 +1487,6 @@ async function saveTransaction(){
   const amount=currentType==='expense'?Math.abs(rawAmount):rawAmount;
   if(!cat){alert('Selecione uma categoria.');return}
   const db=loadDB();
-  const editingId=document.getElementById('f-editing-id').value;
   const isParceled=document.getElementById('f-parceled').checked&&!editingId;
   const isShared=document.getElementById('f-shared').checked&&!editingId&&!isParceled;
   if(isShared){
@@ -1577,8 +1656,7 @@ function toggleCatFilter(catId){
 }
 
 function buildCatFilterChips(){
-  const listOwner=_viewOwner==='casal'?_currentProfile:_viewOwner;
-  const usedCats=[...new Set(_db.transactions.filter(t=>t.owner===listOwner).map(t=>t.category))];
+  const usedCats=[...new Set(getTxByOwner(_viewOwner).map(t=>t.category))];
   const container=document.getElementById('cat-filter-chips');
   if(!container)return;
   container.innerHTML=usedCats.map(cid=>{
@@ -1591,15 +1669,13 @@ function renderTxList(){
   buildCatFilterChips();
   const month=parseInt(document.getElementById('tx-month')?.value??-1);
   const year=parseInt(document.getElementById('tx-year')?.value??new Date().getFullYear());
-  // A lista de transações nunca é "do casal" — se a visão global estiver em Casal,
-  // mostramos a lista da pessoa atualmente logada (cada gasto só existe dentro de uma pessoa).
-  const listOwner=_viewOwner==='casal'?_currentProfile:_viewOwner;
-  const db={transactions:_db.transactions.filter(t=>t.owner===listOwner)};
+  // Na visão Casal, combina as transações de Thiago e Luiza em uma única lista.
+  const db={transactions:getTxByOwner(_viewOwner)};
   let txs=month===-1?db.transactions.filter(t=>new Date(t.date+'T12:00').getFullYear()===year):filterTx(db.transactions,month,year);
   if(txTypeFilter!=='all')txs=txs.filter(t=>t.type===txTypeFilter);
   if(txCatFilters.size>0)txs=txs.filter(t=>txCatFilters.has(t.category));
   const lbl=document.getElementById('tx-count-label');
-  if(lbl)lbl.textContent=txs.length+' transação(ões) · '+profileName(listOwner)+(_viewOwner==='casal'?' (visão Casal não combina listas — mostrando as suas)':'');
+  if(lbl)lbl.textContent=txs.length+' transação(ões) · '+(_viewOwner==='casal'?'Casal (Thiago + Luiza) · novo cadastro desativado':profileName(_viewOwner));
   const title=document.getElementById('tx-list-title');
   if(title)title.textContent=txs.length+' transação(ões) encontrada(s)';
   // mostrar botão excluir filtradas só quando há filtro ativo
@@ -1612,8 +1688,7 @@ function renderTxList(){
 async function deleteFiltered(){
   const month=parseInt(document.getElementById('tx-month')?.value??-1);
   const year=parseInt(document.getElementById('tx-year')?.value??new Date().getFullYear());
-  const listOwner=_viewOwner==='casal'?_currentProfile:_viewOwner;
-  const db={transactions:_db.transactions.filter(t=>t.owner===listOwner)};
+  const db={transactions:getTxByOwner(_viewOwner)};
   let toDelete=month===-1?db.transactions.filter(t=>new Date(t.date+'T12:00').getFullYear()===year):filterTx(db.transactions,month,year);
   if(txTypeFilter!=='all')toDelete=toDelete.filter(t=>t.type===txTypeFilter);
   if(txCatFilters.size>0)toDelete=toDelete.filter(t=>txCatFilters.has(t.category));
@@ -2116,6 +2191,7 @@ function refreshAll(){
   if(id==='sec-categorias')renderCategorias();
   if(id==='sec-anual')renderAnual();
   if(id==='sec-evolucao')renderEvolucao();
+  if(id==='sec-comparativo')renderComparativo();
   if(id==='sec-insights')renderInsights();
 }
 function populateAllSelects(){
@@ -2138,13 +2214,14 @@ function populateAllSelects(){
 let chartComparativo=null;
 
 function renderComparativo(){
+  const cmpOwner=document.getElementById('cmp-owner')?.value||_currentProfile||'thiago';
   const mode=document.getElementById('cmp-mode')?.value||'ytd';
   const year=parseInt(document.getElementById('cmp-year')?.value??new Date().getFullYear());
   const prevYear=year-1;
   const cmpMonthSel=document.getElementById('cmp-month');
   if(cmpMonthSel) cmpMonthSel.style.display=mode==='month'?'inline-block':'none';
   const selMonth=mode==='month'?parseInt(cmpMonthSel?.value??new Date().getMonth()):null;
-  const db=visibleDB();
+  const db={transactions:getTxByOwner(cmpOwner)};
 
   // Define which months to include
   const now=new Date();
@@ -2174,7 +2251,8 @@ function renderComparativo(){
 
   // subtitle
   const modeLabel=mode==='ytd'?`Jan–${MONTHS_SHORT[maxMonth]}`:(mode==='month'?MONTHS[selMonth]:'Ano completo');
-  document.getElementById('cmp-subtitle').textContent=`${modeLabel} ${year} vs ${modeLabel} ${prevYear}`;
+  const cmpOwnerLabel=cmpOwner==='casal'?'Casal':profileName(cmpOwner);
+  document.getElementById('cmp-subtitle').textContent=`${cmpOwnerLabel} · ${modeLabel} ${year} vs ${modeLabel} ${prevYear}`;
 
   // update labels
   ['','2','3'].forEach(s=>{
@@ -2300,56 +2378,202 @@ function isExcludedFromProjection(catName){
   return PAT_EXCLUDED_PATTERNS.some(p=>p.test(n));
 }
 
-// Busca série BCB com fallback via proxy CORS
-async function fetchBCBSerie(serie){
-  // Tenta direto primeiro (funciona em localhost e alguns hosts)
-  const direct=`https://api.bcb.gov.br/dados/serie/bcdata.sgs.${serie}/dados/ultimos/12?formato=json`;
-  // Fallback via proxy CORS público
-  const proxy=`https://api.allorigins.win/get?url=${encodeURIComponent(direct)}`;
+// Curva anual do Boletim Focus.
+// A fonte principal é data/projecoes-bcb.json, atualizado pelo GitHub Actions.
+// Se o arquivo ainda não existir ou estiver vazio, o navegador tenta a API OData do BCB.
+const PAT_FOCUS_CACHE_KEY='fintrack_focus_curve_v2';
+const PAT_CURVE_OVERRIDES_KEY='fintrack_focus_overrides_v2';
+let _patFocus={fonte:'Banco Central do Brasil — Boletim Focus',atualizadoEm:null,coletadoEm:null,projecoes:[]};
+let _patCurveOverrides={};
 
-  // Tenta direto
-  try{
-    const r=await fetch(direct,{signal:AbortSignal.timeout?AbortSignal.timeout(6000):undefined});
-    if(r.ok){
-      const data=await r.json();
-      if(Array.isArray(data)&&data.length){
-        return parseFloat(String(data[data.length-1].valor).replace(',','.'));
-      }
-    }
-  }catch{}
+try{_patCurveOverrides=JSON.parse(localStorage.getItem(PAT_CURVE_OVERRIDES_KEY)||'{}')||{}}catch{_patCurveOverrides={}}
 
-  // Fallback proxy
-  try{
-    const r=await fetch(proxy);
-    if(r.ok){
-      const wrapper=await r.json();
-      if(wrapper.contents){
-        const data=JSON.parse(wrapper.contents);
-        if(Array.isArray(data)&&data.length){
-          return parseFloat(String(data[data.length-1].valor).replace(',','.'));
-        }
-      }
-    }
-  }catch{}
-
-  return null;
+function patNumber(value){
+  if(typeof value==='number')return Number.isFinite(value)?value:null;
+  const n=parseFloat(String(value??'').replace(',','.'));
+  return Number.isFinite(n)?n:null;
 }
 
-async function fetchFocusSelic(){
-  // Série 4390 = Meta SELIC definida pelo Copom (% a.a.) - mais estável
-  // Série 432  = SELIC acumulada no mês (% a.m.) - precisa converter
-  // Usamos 4390 que já vem em % a.a.
-  const val=await fetchBCBSerie(4390);
-  return val;
+function patYear(value){
+  const match=String(value??'').match(/(20\d{2})/);
+  return match?parseInt(match[1],10):null;
 }
 
-async function fetchFocusIPCA(){
-  // Série 13522 = IPCA acumulado 12 meses esperado (Focus)
-  // Série 433   = IPCA acumulado mês (% a.m.) - precisa converter
-  // Fallback: série 4175 = expectativa IPCA 12 meses
-  let val=await fetchBCBSerie(13522);
-  if(val==null) val=await fetchBCBSerie(4175);
-  return val;
+function normalizeFocusPayload(payload){
+  const rows=Array.isArray(payload?.projecoes)?payload.projecoes:[];
+  const byYear=new Map();
+  rows.forEach(row=>{
+    const ano=patYear(row.ano??row.DataReferencia);
+    const selic=patNumber(row.selic??row.Selic);
+    const ipca=patNumber(row.ipca??row.IPCA);
+    if(!ano||selic==null||ipca==null)return;
+    byYear.set(ano,{ano,selic,ipca,fonte:row.fonte||'Focus/BCB'});
+  });
+  return{
+    fonte:payload?.fonte||'Banco Central do Brasil — Boletim Focus',
+    atualizadoEm:payload?.atualizadoEm||payload?.dataReferencia||null,
+    coletadoEm:payload?.coletadoEm||null,
+    projecoes:[...byYear.values()].sort((a,b)=>a.ano-b.ano)
+  };
+}
+
+function focusDateLabel(value){
+  if(!value)return'—';
+  const iso=String(value).slice(0,10);
+  const parts=iso.split('-');
+  if(parts.length===3)return`${parts[2]}/${parts[1]}/${parts[0]}`;
+  return String(value);
+}
+
+async function fetchJsonWithTimeout(url,timeout=9000){
+  const controller=typeof AbortController!=='undefined'?new AbortController():null;
+  const timer=controller?setTimeout(()=>controller.abort(),timeout):null;
+  try{
+    const response=await fetch(url,{cache:'no-store',signal:controller?.signal});
+    if(!response.ok)throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  }finally{if(timer)clearTimeout(timer)}
+}
+
+async function fetchFocusIndicator(indicator){
+  const endpoint='https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/ExpectativasMercadoAnuais';
+  const query=`?$top=10000&$filter=${encodeURIComponent(`Indicador eq '${indicator}'`)}&$orderby=${encodeURIComponent('Data desc')}&$format=json`;
+  const data=await fetchJsonWithTimeout(endpoint+query,12000);
+  const rows=Array.isArray(data?.value)?data.value:[];
+  if(!rows.length)return{date:null,values:new Map()};
+
+  const latestDate=rows.map(r=>String(r.Data||'')).filter(Boolean).sort().pop();
+  const latestRows=rows.filter(r=>String(r.Data||'')===latestDate);
+  const values=new Map();
+
+  latestRows.forEach(row=>{
+    const ano=patYear(row.DataReferencia);
+    const value=patNumber(row.Mediana??row.Media);
+    if(!ano||value==null)return;
+    const respondents=patNumber(row.numeroRespondentes)??0;
+    const current=values.get(ano);
+    if(!current||respondents>current.respondents){
+      values.set(ano,{value,respondents});
+    }
+  });
+  return{date:latestDate,values};
+}
+
+async function fetchFocusDirect(){
+  const [selic,ipca]=await Promise.all([
+    fetchFocusIndicator('Selic'),
+    fetchFocusIndicator('IPCA')
+  ]);
+  const years=[...new Set([...selic.values.keys(),...ipca.values.keys()])].sort((a,b)=>a-b);
+  const projecoes=years.map(ano=>({
+    ano,
+    selic:selic.values.get(ano)?.value,
+    ipca:ipca.values.get(ano)?.value,
+    fonte:'Focus/BCB'
+  })).filter(row=>row.selic!=null&&row.ipca!=null);
+  if(!projecoes.length)throw new Error('A API não retornou uma curva anual completa.');
+  return normalizeFocusPayload({
+    fonte:'Banco Central do Brasil — Boletim Focus',
+    atualizadoEm:[selic.date,ipca.date].filter(Boolean).sort().pop(),
+    coletadoEm:new Date().toISOString(),
+    projecoes
+  });
+}
+
+async function loadFocusProjection(force=false){
+  const selicBadge=document.getElementById('pat-selic-badge');
+  const ipcaBadge=document.getElementById('pat-ipca-badge');
+  if(selicBadge){selicBadge.className='pat-api-badge pat-api-load';selicBadge.textContent='⏳ Buscando curva Focus...'}
+  if(ipcaBadge){ipcaBadge.className='pat-api-badge pat-api-load';ipcaBadge.textContent='⏳ Aguardando IPCA...'}
+
+  let loaded=null;
+  let source='';
+
+  // 1) Arquivo estático gerado pelo GitHub Actions.
+  try{
+    const suffix=force?`?v=${Date.now()}`:'';
+    const local=normalizeFocusPayload(await fetchJsonWithTimeout(`data/projecoes-bcb.json${suffix}`,7000));
+    if(local.projecoes.length){loaded=local;source='arquivo automático do repositório'}
+  }catch{}
+
+  // 2) API direta do BCB, útil antes da primeira execução do workflow.
+  if(!loaded){
+    try{loaded=await fetchFocusDirect();source='API direta do BCB'}catch{}
+  }
+
+  // 3) Cache local da última curva válida.
+  if(!loaded){
+    try{
+      const cached=normalizeFocusPayload(JSON.parse(localStorage.getItem(PAT_FOCUS_CACHE_KEY)||'{}'));
+      if(cached.projecoes.length){loaded=cached;source='última curva salva neste navegador'}
+    }catch{}
+  }
+
+  if(loaded?.projecoes?.length){
+    _patFocus=loaded;
+    localStorage.setItem(PAT_FOCUS_CACHE_KEY,JSON.stringify(loaded));
+    const last=loaded.projecoes[loaded.projecoes.length-1];
+    if(selicBadge){selicBadge.className='pat-api-badge pat-api-ok';selicBadge.textContent=`✓ SELIC até ${last.ano}`}
+    if(ipcaBadge){ipcaBadge.className='pat-api-badge pat-api-ok';ipcaBadge.textContent=`✓ IPCA até ${last.ano}`}
+    const meta=document.getElementById('pat-focus-meta');
+    if(meta)meta.textContent=`${loaded.fonte} · referência ${focusDateLabel(loaded.atualizadoEm)} · carregado via ${source}.`;
+  }else{
+    _patFocus={fonte:'Banco Central do Brasil — Boletim Focus',atualizadoEm:null,coletadoEm:null,projecoes:[]};
+    if(selicBadge){selicBadge.className='pat-api-badge pat-api-err';selicBadge.textContent='✗ Curva indisponível'}
+    if(ipcaBadge){ipcaBadge.className='pat-api-badge pat-api-err';ipcaBadge.textContent='✗ Usando premissas'}
+    const meta=document.getElementById('pat-focus-meta');
+    if(meta)meta.textContent='Não foi possível obter o Focus. O cálculo usará as premissas de longo prazo, que permanecem editáveis.';
+  }
+  renderPatCurve();
+}
+
+async function reloadFocusProjection(){
+  await loadFocusProjection(true);
+}
+
+function getPatRateForYear(ano){
+  const official=_patFocus.projecoes.find(row=>row.ano===ano);
+  const override=_patCurveOverrides[String(ano)]||{};
+  const selicLong=patNumber(document.getElementById('pat-selic-long')?.value)??8;
+  const ipcaLong=patNumber(document.getElementById('pat-ipca-long')?.value)??3.5;
+  return{
+    ano,
+    selic:patNumber(override.selic)??official?.selic??selicLong,
+    ipca:patNumber(override.ipca)??official?.ipca??ipcaLong,
+    official:!!official,
+    overridden:patNumber(override.selic)!=null||patNumber(override.ipca)!=null,
+    source:official?'Focus/BCB':'Premissa de longo prazo'
+  };
+}
+
+function setPatCurveValue(ano,key,value){
+  const n=patNumber(value);
+  if(!_patCurveOverrides[String(ano)])_patCurveOverrides[String(ano)]={};
+  if(n==null)delete _patCurveOverrides[String(ano)][key];
+  else _patCurveOverrides[String(ano)][key]=n;
+  localStorage.setItem(PAT_CURVE_OVERRIDES_KEY,JSON.stringify(_patCurveOverrides));
+  renderPatCurve();
+}
+
+function renderPatCurve(){
+  const tbody=document.getElementById('pat-curve-tbody');
+  if(!tbody)return;
+  const anos=Math.max(1,Math.min(50,parseInt(document.getElementById('pat-anos')?.value)||10));
+  const now=new Date();
+  const firstYear=now.getFullYear();
+  const lastYear=new Date(firstYear,now.getMonth()+anos*12-1,1).getFullYear();
+  const rows=[];
+  for(let ano=firstYear;ano<=lastYear;ano++)rows.push(getPatRateForYear(ano));
+  tbody.innerHTML=rows.map(row=>{
+    const chipClass=row.official?'focus':'manual';
+    const label=row.overridden?'Editada manualmente':row.source;
+    return`<tr>
+      <td style="font-family:'DM Mono',monospace;font-weight:500">${row.ano}</td>
+      <td><input class="pat-curve-input" type="number" step="0.01" value="${row.selic.toFixed(2)}" onchange="setPatCurveValue(${row.ano},'selic',this.value)" aria-label="SELIC de ${row.ano}"> %</td>
+      <td><input class="pat-curve-input" type="number" step="0.01" value="${row.ipca.toFixed(2)}" onchange="setPatCurveValue(${row.ano},'ipca',this.value)" aria-label="IPCA de ${row.ano}"> %</td>
+      <td><span class="pat-source-chip ${chipClass}">${row.official?'●':'○'} ${label}</span></td>
+    </tr>`;
+  }).join('');
 }
 
 async function renderPatrimonio(){
@@ -2372,24 +2596,21 @@ async function renderPatrimonio(){
   const includedCats=allIncCats.filter(c=>!isExcludedFromProjection(c.name));
   const excludedCats=allIncCats.filter(c=>isExcludedFromProjection(c.name));
 
-  // receita operacional média (só categorias incluídas)
   const includedIds=new Set(includedCats.map(c=>c.id));
   let totalRec=0;
   last12Months.forEach(({m:mo,y:yr})=>{
     const txs=filterTx(db.transactions,mo,yr);
-    totalRec+=txs.filter(t=>t.type==='income'&&includedIds.has(t.category)).reduce((s,t)=>s+t.amount,0);
+    totalRec+=txs.filter(t=>t.type==='income'&&includedIds.has(t.category)).reduce((s,t)=>s+Math.abs(t.amount),0);
   });
   const recBase=totalRec/12;
 
-  // despesa média (todas)
   let totalDesp=0;
   last12Months.forEach(({m:mo,y:yr})=>{
     const txs=filterTx(db.transactions,mo,yr);
-    totalDesp+=txs.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);
+    totalDesp+=txs.filter(t=>t.type==='expense').reduce((s,t)=>s+Math.abs(t.amount),0);
   });
   const despBase=totalDesp/12;
 
-  // Atualiza UI base
   document.getElementById('pat-rec-base').textContent=fmt(recBase);
   document.getElementById('pat-desp-base').textContent=fmt(despBase);
   document.getElementById('pat-rec-cats').textContent=includedCats.map(c=>c.name).join(', ')||'Nenhuma';
@@ -2397,81 +2618,48 @@ async function renderPatrimonio(){
     `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;background:var(--bg3);border:1px solid var(--border);font-size:11px;color:var(--text3)">${c.icon} ${c.name}</span>`
   ).join('')||'<span style="font-size:11px;color:var(--text3)">Nenhuma excluída</span>';
 
-  // Busca SELIC e IPCA
-  const selicBadge=document.getElementById('pat-selic-badge');
-  const ipcaBadge=document.getElementById('pat-ipca-badge');
-  selicBadge.className='pat-api-badge pat-api-load'; selicBadge.textContent='⏳ Buscando SELIC...';
-  ipcaBadge.className='pat-api-badge pat-api-load'; ipcaBadge.textContent='⏳ Buscando IPCA...';
-
-  const [selicVal,ipcaVal]=await Promise.all([fetchFocusSelic(),fetchFocusIPCA()]);
-
-  if(selicVal!=null){
-    const selicInput=document.getElementById('pat-selic');
-    if(!selicInput.value) selicInput.value=selicVal.toFixed(2);
-    document.getElementById('pat-selic-hint').textContent=`BCB (Meta Copom): ${selicVal.toFixed(2)}% a.a.`;
-    selicBadge.className='pat-api-badge pat-api-ok'; selicBadge.textContent=`✓ SELIC ${selicVal.toFixed(2)}% a.a.`;
-  } else {
-    selicBadge.className='pat-api-badge pat-api-err'; selicBadge.textContent='✗ API indisponível';
-    document.getElementById('pat-selic-hint').textContent='Consulte bcb.gov.br e insira manualmente (ex: 13.75)';
-    // Sugestão do valor atual baseado no contexto (2026)
-    const selicInput=document.getElementById('pat-selic');
-    if(!selicInput.value) selicInput.placeholder='Ex: 13.75';
-  }
-
-  if(ipcaVal!=null){
-    const ipcaInput=document.getElementById('pat-ipca');
-    if(!ipcaInput.value) ipcaInput.value=ipcaVal.toFixed(2);
-    document.getElementById('pat-ipca-hint').textContent=`BCB (Focus 12m): ${ipcaVal.toFixed(2)}% a.a.`;
-    ipcaBadge.className='pat-api-badge pat-api-ok'; ipcaBadge.textContent=`✓ IPCA ${ipcaVal.toFixed(2)}% a.a.`;
-  } else {
-    ipcaBadge.className='pat-api-badge pat-api-err'; ipcaBadge.textContent='✗ API indisponível';
-    document.getElementById('pat-ipca-hint').textContent='Consulte bcb.gov.br e insira manualmente (ex: 5.50)';
-    const ipcaInput=document.getElementById('pat-ipca');
-    if(!ipcaInput.value) ipcaInput.placeholder='Ex: 5.50';
-  }
-
-  // guarda base para o cálculo
   _patData={recBase,despBase,includedCats,excludedCats};
+  await loadFocusProjection(false);
 }
 
 function calcularPatrimonio(){
   if(!_patData){alert('Aguarde o carregamento dos dados.');return}
-  const saldoInicial=parseFloat(document.getElementById('pat-saldo').value)||0;
-  const anos=parseInt(document.getElementById('pat-anos').value)||10;
-  const selicAnual=parseFloat(document.getElementById('pat-selic').value)||0;
-  const ipcaAnual=parseFloat(document.getElementById('pat-ipca').value)||0;
-  const crescRec=parseFloat(document.getElementById('pat-cresc-rec').value)||0;
-  const crescDesp=parseFloat(document.getElementById('pat-cresc-desp').value)||0;
-  const aporte=parseFloat(document.getElementById('pat-aporte').value)||0;
+  const saldoInicial=patNumber(document.getElementById('pat-saldo').value)||0;
+  const anos=Math.max(1,Math.min(50,parseInt(document.getElementById('pat-anos').value)||10));
+  const selicPct=patNumber(document.getElementById('pat-selic-pct').value)??100;
+  const crescRec=patNumber(document.getElementById('pat-cresc-rec').value)||0;
+  const crescDesp=patNumber(document.getElementById('pat-cresc-desp').value)||0;
+  const aporte=patNumber(document.getElementById('pat-aporte').value)||0;
 
   if(!saldoInicial){alert('Informe o saldo atual aplicado.');return}
-  if(!selicAnual){alert('Informe a taxa SELIC.');return}
-
-  const selicMensal=(Math.pow(1+selicAnual/100,1/12)-1);
-  const ipcaMensal=(Math.pow(1+ipcaAnual/100,1/12)-1);
+  if(selicPct<0){alert('A rentabilidade em relação à SELIC não pode ser negativa.');return}
 
   const {recBase,despBase}=_patData;
-
-  // Projeção mês a mês
+  const startDate=new Date();
   let saldo=saldoInicial;
   let rendimentoAcum=0;
-  let deflator=1; // para valor real
-
+  let deflator=1;
   const monthly=[];
   const yearly=[];
 
   for(let ano=1;ano<=anos;ano++){
-    const recAnual=recBase*Math.pow(1+crescRec/100,ano-1);
-    const despAnual=despBase*Math.pow(1+crescDesp/100,ano-1);
-    const recMes=recAnual;
-    const despMes=despAnual;
-
-    let saldoInicioAno=saldo;
-    let rendAnual=0;
-    let recTotalAno=0;
-    let despTotalAno=0;
+    const recMes=recBase*Math.pow(1+crescRec/100,ano-1);
+    const despMes=despBase*Math.pow(1+crescDesp/100,ano-1);
+    const saldoInicioAno=saldo;
+    let rendAnual=0,recTotalAno=0,despTotalAno=0;
+    const ratesUsed=[];
 
     for(let mes=1;mes<=12;mes++){
+      const offset=(ano-1)*12+(mes-1);
+      const calendarDate=new Date(startDate.getFullYear(),startDate.getMonth()+offset,1);
+      const calYear=calendarDate.getFullYear();
+      const calMonth=calendarDate.getMonth();
+      const curve=getPatRateForYear(calYear);
+      const selicEfetiva=curve.selic*(selicPct/100);
+      const selicMensal=Math.pow(1+selicEfetiva/100,1/12)-1;
+      const ipcaMensal=Math.pow(1+curve.ipca/100,1/12)-1;
+      ratesUsed.push({selic:curve.selic,ipca:curve.ipca});
+
       const rend=saldo*selicMensal;
       const fluxo=recMes-despMes+aporte;
       saldo=saldo+rend+fluxo;
@@ -2482,38 +2670,23 @@ function calcularPatrimonio(){
       deflator*=(1+ipcaMensal);
 
       monthly.push({
-        ano,mes,
-        saldo,
-        saldobReal:saldo/deflator,
-        rend,
-        rec:recMes,
-        desp:despMes,
-        fluxo,
-        rendimentoAcum
+        ano,mes,calYear,calMonth,
+        saldo,saldobReal:saldo/deflator,rend,rec:recMes,desp:despMes,fluxo,rendimentoAcum,
+        selicAnual:curve.selic,ipcaAnual:curve.ipca
       });
     }
 
+    const avgSelic=ratesUsed.reduce((s,r)=>s+r.selic,0)/ratesUsed.length;
+    const avgIpca=ratesUsed.reduce((s,r)=>s+r.ipca,0)/ratesUsed.length;
     yearly.push({
-      ano,
-      saldoInicio:saldoInicioAno,
-      saldoFim:saldo,
-      saldoReal:saldo/deflator,
-      rendAnual,
-      recTotal:recTotalAno,
-      despTotal:despTotalAno,
-      fluxoTotal:recTotalAno-despTotalAno+(aporte*12),
-      rendimentoAcum
+      ano,saldoInicio:saldoInicioAno,saldoFim:saldo,saldoReal:saldo/deflator,rendAnual,
+      recTotal:recTotalAno,despTotal:despTotalAno,
+      fluxoTotal:recTotalAno-despTotalAno+(aporte*12),rendimentoAcum,avgSelic,avgIpca
     });
   }
 
-  // Marcos
   const milestones=[100000,250000,500000,1000000,2000000,5000000];
-  const milestoneResults=milestones.map(target=>{
-    const hit=monthly.find(m=>m.saldo>=target);
-    return{target,hit};
-  });
-
-  // Atualiza cards
+  const milestoneResults=milestones.map(target=>({target,hit:monthly.find(m=>m.saldo>=target)}));
   const y1=yearly[0];
   const yMid=yearly[Math.min(4,yearly.length-1)];
   const yLong=yearly[Math.min(9,yearly.length-1)];
@@ -2522,133 +2695,76 @@ function calcularPatrimonio(){
   document.getElementById('pat-cards').style.display='grid';
   document.getElementById('pat-1y').textContent=fmt(y1.saldoFim);
   document.getElementById('pat-1y-real').textContent='Real: '+fmt(y1.saldoReal);
-
-  const midLabel=`Patrimônio em ${Math.min(5,anos)} ano${anos>=5?'s':''}`;
-  document.getElementById('pat-mid-label').textContent=midLabel;
+  document.getElementById('pat-mid-label').textContent=`Patrimônio em ${Math.min(5,anos)} ano${Math.min(5,anos)>1?'s':''}`;
   document.getElementById('pat-mid').textContent=fmt(yMid.saldoFim);
   document.getElementById('pat-mid-real').textContent='Real: '+fmt(yMid.saldoReal);
-
-  const longLabel=`Patrimônio em ${Math.min(10,anos)} ano${anos>=10?'s':''}`;
-  document.getElementById('pat-long-label').textContent=longLabel;
+  document.getElementById('pat-long-label').textContent=`Patrimônio em ${Math.min(10,anos)} ano${Math.min(10,anos)>1?'s':''}`;
   document.getElementById('pat-long').textContent=fmt(yLong.saldoFim);
   document.getElementById('pat-long-real').textContent='Real: '+fmt(yLong.saldoReal);
-
   document.getElementById('pat-rend-total').textContent=fmt(yFinal.rendimentoAcum);
-  const pctGain=((yFinal.rendimentoAcum/saldoInicial)*100).toFixed(1);
-  document.getElementById('pat-rend-pct').textContent=`+${pctGain}% sobre o capital inicial`;
+  document.getElementById('pat-rend-pct').textContent=`+${((yFinal.rendimentoAcum/saldoInicial)*100).toFixed(1)}% sobre o capital inicial · ${selicPct.toFixed(0)}% da SELIC`;
 
-  // Marcos
   const mileEl=document.getElementById('pat-milestones');
   const mileList=document.getElementById('pat-milestone-list');
   mileEl.style.display='block';
   mileList.innerHTML=milestoneResults.map(({target,hit})=>{
     const reached=!!hit;
     const label=target>=1000000?`R$ ${(target/1000000).toFixed(0)}M`:`R$ ${(target/1000).toFixed(0)}k`;
-    const when=hit?`Ano ${hit.ano}, mês ${hit.mes}`:'Além do horizonte';
-    return`<span class="pat-milestone ${reached?'reached':''}">
-      ${reached?'✅':'⬜'} ${label}
-      <span style="font-size:10px;color:${reached?'inherit':'var(--text3)'}">· ${when}</span>
-    </span>`;
+    const when=hit?`${MONTHS_SHORT[hit.calMonth]}/${hit.calYear}`:'Além do horizonte';
+    return`<span class="pat-milestone ${reached?'reached':''}">${reached?'✅':'⬜'} ${label}<span style="font-size:10px;color:${reached?'inherit':'var(--text3)'}">· ${when}</span></span>`;
   }).join('');
 
-  // Gráfico
   document.getElementById('pat-chart-card').style.display='block';
   chartPatrimonio=dc(chartPatrimonio);
   chartPatrimonio=new Chart(document.getElementById('chart-patrimonio'),{
     type:'line',
-    data:{
-      labels:yearly.map(y=>'Ano '+y.ano),
-      datasets:[
-        {
-          label:'Patrimônio Nominal',
-          data:yearly.map(y=>y.saldoFim),
-          borderColor:'rgba(34,211,160,0.9)',
-          backgroundColor:'rgba(34,211,160,0.08)',
-          borderWidth:2.5,pointRadius:3,tension:0.3,fill:true
-        },
-        {
-          label:'Valor Real (−IPCA)',
-          data:yearly.map(y=>y.saldoReal),
-          borderColor:'rgba(96,165,250,0.9)',
-          backgroundColor:'rgba(96,165,250,0.05)',
-          borderWidth:2,pointRadius:2,tension:0.3,
-          borderDash:[5,3],fill:true
-        },
-        {
-          label:'Rendimento Acumulado',
-          data:yearly.map(y=>y.rendimentoAcum),
-          borderColor:'rgba(251,191,36,0.8)',
-          backgroundColor:'transparent',
-          borderWidth:1.5,pointRadius:2,tension:0.3,
-          borderDash:[3,3]
-        }
-      ]
-    },
-    options:{
-      responsive:true,maintainAspectRatio:false,
-      plugins:{
-        legend:{display:false},
-        tooltip:{callbacks:{label:ctx=>` ${fmt(ctx.raw)}`}}
-      },
-      scales:{
-        x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#8b93a8',maxTicksLimit:12}},
-        y:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#8b93a8',callback:v=>{
-          if(v>=1000000)return'R$'+(v/1000000).toFixed(1)+'M';
-          if(v>=1000)return'R$'+(v/1000).toFixed(0)+'k';
-          return'R$'+v;
-        }}}
-      }
-    }
+    data:{labels:yearly.map(y=>'Ano '+y.ano),datasets:[
+      {label:'Patrimônio Nominal',data:yearly.map(y=>y.saldoFim),borderColor:'rgba(34,211,160,0.9)',backgroundColor:'rgba(34,211,160,0.08)',borderWidth:2.5,pointRadius:3,tension:0.3,fill:true},
+      {label:'Valor Real (−IPCA)',data:yearly.map(y=>y.saldoReal),borderColor:'rgba(96,165,250,0.9)',backgroundColor:'rgba(96,165,250,0.05)',borderWidth:2,pointRadius:2,tension:0.3,borderDash:[5,3],fill:true},
+      {label:'Rendimento Acumulado',data:yearly.map(y=>y.rendimentoAcum),borderColor:'rgba(251,191,36,0.8)',backgroundColor:'transparent',borderWidth:1.5,pointRadius:2,tension:0.3,borderDash:[3,3]}
+    ]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:{callbacks:{label:ctx=>` ${fmt(ctx.raw)}`}}},scales:{
+      x:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#8b93a8',maxTicksLimit:12}},
+      y:{grid:{color:'rgba(255,255,255,0.04)'},ticks:{color:'#8b93a8',callback:v=>v>=1000000?'R$'+(v/1000000).toFixed(1)+'M':v>=1000?'R$'+(v/1000).toFixed(0)+'k':'R$'+v}}
+    }}
   });
 
-  // Tabela — modo anual por padrão
   document.getElementById('pat-table-card').style.display='block';
   document.getElementById('pat-show-monthly').checked=false;
-
-  // guarda dados para toggle mensal
   window._patYearly=yearly;
   window._patMonthly=monthly;
-
   renderPatTable(false);
 }
 
 function renderPatTable(showMonthly){
   const tbody=document.getElementById('pat-tbody');
   if(!tbody)return;
-
   if(!showMonthly){
-    tbody.innerHTML=(window._patYearly||[]).map((y,i)=>{
+    tbody.innerHTML=(window._patYearly||[]).map(y=>{
       const isHighlight=(y.ano===1||y.ano===5||y.ano===10);
       const balColor=y.fluxoTotal>=0?'var(--green)':'var(--red)';
       return`<tr class="${isHighlight?'highlight-year':''}">
-        <td>Ano ${y.ano}</td>
-        <td style="color:var(--green)">${fmt(y.recTotal)}</td>
-        <td style="color:var(--red)">${fmt(y.despTotal)}</td>
+        <td>Ano ${y.ano}<div style="font-size:10px;color:var(--text3);font-weight:400">SELIC méd. ${y.avgSelic.toFixed(2)}% · IPCA méd. ${y.avgIpca.toFixed(2)}%</div></td>
+        <td style="color:var(--green)">${fmt(y.recTotal)}</td><td style="color:var(--red)">${fmt(y.despTotal)}</td>
         <td style="color:${balColor}">${y.fluxoTotal>=0?'+':''}${fmt(y.fluxoTotal)}</td>
-        <td style="color:var(--amber)">${fmt(y.rendAnual)}</td>
-        <td style="color:var(--green);font-weight:600">${fmt(y.saldoFim)}</td>
-        <td style="color:var(--blue)">${fmt(y.saldoReal)}</td>
+        <td style="color:var(--amber)">${fmt(y.rendAnual)}</td><td style="color:var(--green);font-weight:600">${fmt(y.saldoFim)}</td><td style="color:var(--blue)">${fmt(y.saldoReal)}</td>
       </tr>`;
     }).join('');
-  } else {
+  }else{
     tbody.innerHTML=(window._patMonthly||[]).map(m=>{
       const balColor=m.fluxo>=0?'var(--green)':'var(--red)';
       return`<tr>
-        <td style="color:var(--text2);font-weight:400">Ano ${m.ano} · ${MONTHS_SHORT[m.mes-1]}</td>
-        <td style="color:var(--green)">${fmt(m.rec)}</td>
-        <td style="color:var(--red)">${fmt(m.desp)}</td>
-        <td style="color:${balColor}">${m.fluxo>=0?'+':''}${fmt(m.fluxo)}</td>
-        <td style="color:var(--amber)">${fmt(m.rend)}</td>
-        <td style="color:var(--green);font-weight:600">${fmt(m.saldo)}</td>
-        <td style="color:var(--blue)">${fmt(m.saldobReal)}</td>
+        <td style="color:var(--text2);font-weight:400">${MONTHS_SHORT[m.calMonth]}/${m.calYear}<div style="font-size:10px;color:var(--text3)">SELIC ${m.selicAnual.toFixed(2)}% · IPCA ${m.ipcaAnual.toFixed(2)}%</div></td>
+        <td style="color:var(--green)">${fmt(m.rec)}</td><td style="color:var(--red)">${fmt(m.desp)}</td>
+        <td style="color:${balColor}">${m.fluxo>=0?'+':''}${fmt(m.fluxo)}</td><td style="color:var(--amber)">${fmt(m.rend)}</td>
+        <td style="color:var(--green);font-weight:600">${fmt(m.saldo)}</td><td style="color:var(--blue)">${fmt(m.saldobReal)}</td>
       </tr>`;
     }).join('');
   }
 }
 
 function toggleMonthlyDetail(){
-  const show=document.getElementById('pat-show-monthly')?.checked;
-  renderPatTable(show);
+  renderPatTable(!!document.getElementById('pat-show-monthly')?.checked);
 }
 
 // ===================== INIT =====================
