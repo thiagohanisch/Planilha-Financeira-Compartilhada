@@ -1030,7 +1030,7 @@ const DEFAULT_CATS={
     {id:'freelance',name:'Freelance',icon:'💻',color:'#60a5fa',builtin:true},
     {id:'investimento',name:'Investimento',icon:'📈',color:'#fbbf24',builtin:true},
     {id:'bonus',name:'Bônus',icon:'🎁',color:'#f472b6',builtin:true},
-    {id:'outros_r',name:'Outros',icon:'💰',color:'#94a3b8',builtin:true},
+    {id:'outros_r',name:'Outras rendas',icon:'💰',color:'#94a3b8',builtin:true},
   ]
 };
 
@@ -1088,6 +1088,7 @@ async function loadAll(){
     _imports=impsR?JSON.parse(impsR):[];
     _fbUrl=fbR||'';
     await migrateDoacaoToExpense();
+    await migrateOutrasRendasToIncome();
     await migrateExpenseAmounts();
     await migrateOwnerField();
   }catch{}
@@ -1139,6 +1140,54 @@ async function migrateDoacaoToExpense(){
     });
   }
   if(changed){await saveCats(_cats);await saveDB(_db)}
+}
+
+// Migração: "Outras rendas" é sempre uma categoria de receita.
+// Unifica categorias antigas/importadas e corrige transações já salvas.
+async function migrateOutrasRendasToIncome(){
+  const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
+  const isOutrasRendas=name=>/^(outras? rendas?|rendas? extras?)$/.test(norm(name));
+  let changed=false;
+
+  let target=_cats.income.find(c=>c.id==='outros_r');
+  if(!target){
+    target={id:'outros_r',name:'Outras rendas',icon:'💰',color:'#94a3b8',builtin:true};
+    _cats.income.push(target);
+    changed=true;
+  }else{
+    if(target.name!=='Outras rendas'){target.name='Outras rendas';changed=true}
+    if(!target.icon){target.icon='💰';changed=true}
+    if(!target.color){target.color='#94a3b8';changed=true}
+  }
+
+  const aliases=[
+    ..._cats.expense.filter(c=>isOutrasRendas(c.name)),
+    ..._cats.income.filter(c=>c.id!=='outros_r'&&isOutrasRendas(c.name))
+  ];
+  const aliasIds=new Set(aliases.map(c=>c.id));
+
+  if(aliasIds.size){
+    _db.transactions.forEach(t=>{
+      if(aliasIds.has(t.category)){
+        t.category='outros_r';
+        t.type='income';
+        changed=true;
+      }
+    });
+    _cats.expense=_cats.expense.filter(c=>!aliasIds.has(c.id));
+    _cats.income=_cats.income.filter(c=>c.id==='outros_r'||!aliasIds.has(c.id));
+    changed=true;
+  }
+
+  _db.transactions.forEach(t=>{
+    if(t.category==='outros_r'&&t.type!=='income'){
+      t.type='income';
+      changed=true;
+    }
+  });
+
+  if(changed){await saveCats(_cats);await saveDBAndSync(_db)}
+  return changed;
 }
 function loadCats(){return _cats}
 function loadDB(){return _db}
@@ -1815,7 +1864,9 @@ function handleFile(file){
         const tipoN=norm(rawTipo);let type='expense';
         if(/recebid|entrada|receita|income/.test(tipoN))type='income';
         const deptN=norm(rawDept);
-        // Doação é sempre despesa, independente do tipo marcado na planilha
+        // Regras por categoria prevalecem sobre a coluna de tipo da planilha.
+        // "Outras rendas" é sempre receita; "Doação" é sempre despesa.
+        if(/^(outras? rendas?|rendas? extras?)$/.test(deptN)) type='income';
         if(/doa[cç][aã]o/.test(deptN)) type='expense';
         // A planilha pode representar saídas com sinal negativo. Internamente,
         // despesas precisam permanecer positivas para o saldo usar receita - despesa.
