@@ -1502,6 +1502,7 @@ function toggleMobileMenu(){document.getElementById('sidebar').classList.toggle(
 
 // ===================== MODAL =====================
 let currentType='expense';
+let _modalOwner='thiago';
 function openModal(id){
   if(!id&&_viewOwner==='casal'){
     alert('Na visão Casal é possível consultar as transações combinadas, mas não registrar uma nova. Selecione Thiago ou Luiza para continuar.');
@@ -1523,23 +1524,26 @@ function openModal(id){
   document.getElementById('f-shared-split-row').style.display='none';
   document.getElementById('f-shared-mine-pct').value=50;
   document.getElementById('f-shared-partner-pct').value=50;
-  document.getElementById('f-shared-partner-name').textContent=profileName(otherProfile(_currentProfile));
-  document.getElementById('f-shared-mine-label').textContent='Minha parte ('+profileName(_currentProfile)+') %';
-  document.getElementById('f-shared-partner-label').textContent='Parte de '+profileName(otherProfile(_currentProfile))+' (%)';
+  _modalOwner=_currentProfile;
   if(id){
     const t=loadDB().transactions.find(x=>x.id===id);if(!t)return;
+    _modalOwner=t.owner||_currentProfile;
     setType(t.type);
     document.getElementById('f-desc').value=t.description;
-    document.getElementById('f-amount').value=t.amount;
+    document.getElementById('f-amount').value=t.shared?(t.sharedTotal||t.amount):t.amount;
     document.getElementById('f-date').value=t.date;
     const c=getCat(t.category);
     document.getElementById('f-cat').value=t.category;
     document.getElementById('f-cat-search').value=c.icon+' '+c.name;
-    // não permite alterar o compartilhamento na edição — só na criação
-    document.getElementById('f-shared-row').style.display='none';
+    document.getElementById('f-shared-row').style.display='block';
     if(t.shared){
+      const pair=loadDB().transactions.find(x=>x.groupId===t.groupId&&x.id!==t.id);
+      const minePct=Number(t.splitPct ?? ((Number(t.amount)||0)/(Number(t.sharedTotal)||1)*100))||0;
+      const partnerPct=Number(pair?.splitPct ?? (100-minePct))||0;
+      document.getElementById('f-shared').checked=true;
+      document.getElementById('f-shared-mine-pct').value=minePct;
+      document.getElementById('f-shared-partner-pct').value=partnerPct;
       document.getElementById('f-shared-split-row').style.display='block';
-      document.getElementById('f-shared-split-row').innerHTML=`<div style="font-size:12px;color:var(--text2)">🤝 Esta transação faz parte de um gasto compartilhado (total ${fmt(t.sharedTotal||0)}, pago por ${profileName(t.paidBy)}). Editar aqui só ajusta esta linha — a parte do(a) ${profileName(otherProfile(t.owner))} não muda automaticamente. Se precisar desfazer a divisão, exclua e lance novamente.</div>`;
     }
   }else{
     document.getElementById('f-date').value=new Date().toISOString().split('T')[0];
@@ -1548,6 +1552,9 @@ function openModal(id){
     document.getElementById('f-shared-row').style.display='block';
     setType('expense');
   }
+  document.getElementById('f-shared-partner-name').textContent=profileName(otherProfile(_modalOwner));
+  document.getElementById('f-shared-mine-label').textContent='Parte de '+profileName(_modalOwner)+' (%)';
+  document.getElementById('f-shared-partner-label').textContent='Parte de '+profileName(otherProfile(_modalOwner))+' (%)';
   // auto-calc parcela when amount changes
   document.getElementById('f-amount').oninput=()=>{if(document.getElementById('f-parceled').checked)calcParcelaValor();updateSharedPreview()};
   document.getElementById('f-parcelas').oninput=calcParcelaValor;
@@ -1625,7 +1632,7 @@ function updateSharedPreview(){
   const total=parseFloat(document.getElementById('f-amount').value)||0;
   const mine=parseFloat(document.getElementById('f-shared-mine-pct').value)||0;
   const partner=parseFloat(document.getElementById('f-shared-partner-pct').value)||0;
-  prev.textContent=`Total ${fmt(total)} → ${profileName(_currentProfile)}: ${fmt(total*mine/100)} (${mine}%) · ${profileName(otherProfile(_currentProfile))}: ${fmt(total*partner/100)} (${partner}%)`;
+  prev.textContent=`Total ${fmt(total)} → ${profileName(_modalOwner)}: ${fmt(total*mine/100)} (${mine}%) · ${profileName(otherProfile(_modalOwner))}: ${fmt(total*partner/100)} (${partner}%)`;
 }
 
 async function saveTransaction(){
@@ -1640,29 +1647,49 @@ async function saveTransaction(){
   const date=document.getElementById('f-date').value;
   const cat=document.getElementById('f-cat').value;
   if(!desc||!date||isNaN(rawAmount)||rawAmount===0){alert('Preencha todos os campos.');return}
-  // Despesas são sempre armazenadas como valor positivo.
-  // O sinal negativo é aplicado apenas na exibição e no cálculo do saldo.
   const amount=currentType==='expense'?Math.abs(rawAmount):rawAmount;
   if(!cat){alert('Selecione uma categoria.');return}
   const db=loadDB();
+  const existing=editingId?db.transactions.find(t=>t.id===editingId):null;
   const isParceled=document.getElementById('f-parceled').checked&&!editingId;
-  const isShared=document.getElementById('f-shared').checked&&!editingId&&!isParceled;
+  const isShared=document.getElementById('f-shared').checked&&!isParceled;
+
   if(isShared){
     const minePct=parseFloat(document.getElementById('f-shared-mine-pct').value)||0;
     const partnerPct=parseFloat(document.getElementById('f-shared-partner-pct').value)||0;
-    if(Math.round(minePct+partnerPct)!==100){alert('A divisão precisa somar 100%.');return}
-    const partner=otherProfile(_currentProfile);
-    const groupId='sh_'+Date.now().toString(36);
-    db.transactions.unshift({
-      id:Date.now().toString(),type:currentType,description:desc,
-      amount:parseFloat((amount*minePct/100).toFixed(2)),date,category:cat,
-      owner:_currentProfile,shared:true,groupId,sharedTotal:amount,splitPct:minePct,paidBy:_currentProfile
-    });
-    db.transactions.unshift({
-      id:Date.now().toString()+'_p',type:currentType,description:desc,
-      amount:parseFloat((amount*partnerPct/100).toFixed(2)),date,category:cat,
-      owner:partner,shared:true,groupId,sharedTotal:amount,splitPct:partnerPct,paidBy:_currentProfile
-    });
+    if(Math.abs((minePct+partnerPct)-100)>0.01){alert('A divisão precisa somar 100%.');return}
+    const owner=existing?.owner||_currentProfile;
+    const partner=otherProfile(owner);
+    const groupId=existing?.groupId||('sh_'+Date.now().toString(36));
+    const paidBy=existing?.paidBy||owner;
+    const ownerAmount=parseFloat((amount*minePct/100).toFixed(2));
+    const partnerAmount=parseFloat((amount*partnerPct/100).toFixed(2));
+
+    if(existing){
+      const idx=db.transactions.findIndex(t=>t.id===editingId);
+      db.transactions[idx]={...existing,type:currentType,description:desc,amount:ownerAmount,date,category:cat,owner,shared:true,groupId,sharedTotal:amount,splitPct:minePct,paidBy};
+      const pairIdx=db.transactions.findIndex(t=>t.groupId===groupId&&t.id!==editingId);
+      if(pairIdx>=0){
+        const pair=db.transactions[pairIdx];
+        db.transactions[pairIdx]={...pair,type:currentType,description:desc,amount:partnerAmount,date,category:cat,owner:partner,shared:true,groupId,sharedTotal:amount,splitPct:partnerPct,paidBy};
+      }else{
+        db.transactions.unshift({
+          id:Date.now().toString()+'_p',type:currentType,description:desc,amount:partnerAmount,date,category:cat,
+          owner:partner,shared:true,groupId,sharedTotal:amount,splitPct:partnerPct,paidBy
+        });
+      }
+    }else{
+      db.transactions.unshift({
+        id:Date.now().toString(),type:currentType,description:desc,
+        amount:ownerAmount,date,category:cat,
+        owner,shared:true,groupId,sharedTotal:amount,splitPct:minePct,paidBy
+      });
+      db.transactions.unshift({
+        id:Date.now().toString()+'_p',type:currentType,description:desc,
+        amount:partnerAmount,date,category:cat,
+        owner:partner,shared:true,groupId,sharedTotal:amount,splitPct:partnerPct,paidBy
+      });
+    }
   } else if(isParceled){
     const n=parseInt(document.getElementById('f-parcelas').value)||2;
     if(n<2||n>120){alert('Número de parcelas deve ser entre 2 e 120.');return}
@@ -1689,7 +1716,18 @@ async function saveTransaction(){
   } else {
     if(editingId){
       const idx=db.transactions.findIndex(t=>t.id===editingId);
-      if(idx>=0)db.transactions[idx]={...db.transactions[idx],type:currentType,description:desc,amount,date,category:cat};
+      if(idx>=0){
+        const old=db.transactions[idx];
+        // Ao desmarcar "Compartilhado", remove a contraparte e mantém o valor total nesta transação.
+        if(old.shared&&old.groupId){
+          db.transactions=db.transactions.filter(t=>t.id===editingId||t.groupId!==old.groupId);
+          const newIdx=db.transactions.findIndex(t=>t.id===editingId);
+          const {shared,groupId,sharedTotal,splitPct,paidBy,...base}=db.transactions[newIdx];
+          db.transactions[newIdx]={...base,type:currentType,description:desc,amount,date,category:cat};
+        }else{
+          db.transactions[idx]={...old,type:currentType,description:desc,amount,date,category:cat};
+        }
+      }
     } else {
       db.transactions.unshift({id:Date.now().toString(),type:currentType,description:desc,amount,date,category:cat,owner:_currentProfile});
     }
