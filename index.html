@@ -1411,7 +1411,7 @@ function loadCats(){return _cats}
 function loadDB(){return _db}
 function loadImports(){return _imports}
 async function saveCats(c){_cats=c;await store.set(CATS_KEY,JSON.stringify(c));scheduleAutoSync()}
-async async function saveDB(db){
+async function saveDB(db){
   const previous=new Map((_db?.transactions||[]).map(t=>[String(t.id),JSON.stringify(t)]));
   const next=new Map((db?.transactions||[]).map(t=>[String(t.id),JSON.stringify(t)]));
 
