@@ -2105,7 +2105,9 @@ function refreshAll(){
   if(id==='sec-categorias')renderCategorias();
   if(id==='sec-anual')renderAnual();
   if(id==='sec-evolucao')renderEvolucao();
+  if(id==='sec-comparativo')renderComparativo();
   if(id==='sec-insights')renderInsights();
+  if(id==='sec-patrimonio')renderPatrimonio();
 }
 function populateAllSelects(){
   const now=new Date(),cy=now.getFullYear(),cm=now.getMonth();
@@ -2163,7 +2165,7 @@ function renderComparativo(){
 
   // subtitle
   const modeLabel=mode==='ytd'?`Jan–${MONTHS_SHORT[maxMonth]}`:(mode==='month'?MONTHS[selMonth]:'Ano completo');
-  document.getElementById('cmp-subtitle').textContent=`${modeLabel} ${year} vs ${modeLabel} ${prevYear}`;
+  document.getElementById('cmp-subtitle').textContent=`${modeLabel} ${year} vs ${modeLabel} ${prevYear}${viewSuffix()}`;
 
   // update labels
   ['','2','3'].forEach(s=>{
