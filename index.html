@@ -2472,6 +2472,13 @@ function renderCloudSection(){
   const profileEl=document.getElementById('cloud-user-profile');if(profileEl)profileEl.textContent=_currentProfile?profileName(_currentProfile):'—';
   const urlEl=document.getElementById('cloud-url-display');if(urlEl)urlEl.textContent=FIREBASE_CONFIG.databaseURL;
 }
+function firebaseSafeKey(id){
+  const raw=String(id??'').trim();
+  if(!raw)return 'tx_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2);
+  // O Realtime Database proíbe . # $ / [ ] e caracteres de controle nas chaves.
+  // encodeURIComponent resolve todos eles, exceto o ponto, tratado separadamente.
+  return encodeURIComponent(raw).replace(/\./g,'%2E');
+}
 function txArrayToMap(txs){
   const map={};
   (txs||[]).forEach(t=>{if(t?.id!=null)map[String(t.id)]=t});
@@ -2499,14 +2506,14 @@ async function syncToCloud(showFeedback=false){
     const localMap=txArrayToMap(_db.transactions);
 
     _localDirtyIds.forEach(id=>{
-      if(localMap[id])updates[`fintrack/transactions/${id}`]={
+      if(localMap[id])updates[`fintrack/transactions/${firebaseSafeKey(id)}`]={
         ...localMap[id],
         updatedAt:firebase.database.ServerValue.TIMESTAMP,
         updatedBy:auth.currentUser.uid
       };
     });
     _localDeletedIds.forEach(id=>{
-      updates[`fintrack/transactions/${id}`]=null;
+      updates[`fintrack/transactions/${firebaseSafeKey(id)}`]=null;
     });
 
     updates['fintrack/categories']=JSON.stringify(_cats);
@@ -2516,8 +2523,8 @@ async function syncToCloud(showFeedback=false){
 
     await realtimeDb.ref().update(updates);
 
-    _localDirtyIds.forEach(id=>{if(localMap[id])_cloudTxMap[id]=localMap[id]});
-    _localDeletedIds.forEach(id=>delete _cloudTxMap[id]);
+    _localDirtyIds.forEach(id=>{if(localMap[id])_cloudTxMap[firebaseSafeKey(id)]=localMap[id]});
+    _localDeletedIds.forEach(id=>delete _cloudTxMap[firebaseSafeKey(id)]);
     _localDirtyIds.clear();
     _localDeletedIds.clear();
 
@@ -2535,7 +2542,7 @@ async function migrateLegacyCloudIfNeeded(data){
   const legacy=JSON.parse(data.db);
   const txMap=txArrayToMap(legacy.transactions||[]);
   const updates={};
-  Object.entries(txMap).forEach(([id,t])=>updates[`fintrack/transactions/${id}`]=t);
+  Object.entries(txMap).forEach(([id,t])=>updates[`fintrack/transactions/${firebaseSafeKey(id)}`]=t);
   if(data.cats)updates['fintrack/categories']=data.cats;
   if(data.imports)updates['fintrack/imports']=data.imports;
   updates['fintrack/metadata/migratedAt']=firebase.database.ServerValue.TIMESTAMP;
@@ -2557,8 +2564,8 @@ function attachTransactionsListener(){
     const localMap=txArrayToMap(_db.transactions);
     const merged={...remote};
 
-    _localDirtyIds.forEach(id=>{if(localMap[id])merged[id]=localMap[id]});
-    _localDeletedIds.forEach(id=>delete merged[id]);
+    _localDirtyIds.forEach(id=>{if(localMap[id])merged[firebaseSafeKey(id)]=localMap[id]});
+    _localDeletedIds.forEach(id=>delete merged[firebaseSafeKey(id)]);
 
     _suppressAutoSync=true;
     await saveDB({transactions:txMapToArray(merged)});
