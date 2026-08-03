@@ -662,6 +662,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <span id="pat-selic-badge" class="pat-api-badge pat-api-load">⏳ Buscando SELIC...</span>
         <span id="pat-ipca-badge" class="pat-api-badge pat-api-load">⏳ Buscando IPCA...</span>
+        <button class="btn" id="pat-refresh-rates" type="button" onclick="atualizarTaxasBCB(true)" style="font-size:11px;padding:4px 10px">↻ Atualizar taxas</button>
       </div>
     </div>
 
@@ -2291,56 +2292,145 @@ function isExcludedFromProjection(catName){
   return PAT_EXCLUDED_PATTERNS.some(p=>p.test(n));
 }
 
-// Busca série BCB com fallback via proxy CORS
+// Consulta taxas oficiais no Banco Central do Brasil.
+// Mantém múltiplas tentativas para contornar bloqueios de CORS em hospedagens estáticas.
+async function fetchJsonComTimeout(url, timeoutMs=9000){
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), timeoutMs);
+  try{
+    const response = await fetch(url,{
+      method:'GET',
+      cache:'no-store',
+      headers:{'Accept':'application/json'},
+      signal:controller.signal
+    });
+    if(!response.ok) throw new Error(`HTTP ${response.status}`);
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseValorBCB(valor){
+  const n=parseFloat(String(valor??'').replace(/\./g,'').replace(',','.'));
+  return Number.isFinite(n)?n:null;
+}
+
 async function fetchBCBSerie(serie){
-  // Tenta direto primeiro (funciona em localhost e alguns hosts)
-  const direct=`https://api.bcb.gov.br/dados/serie/bcdata.sgs.${serie}/dados/ultimos/12?formato=json`;
-  // Fallback via proxy CORS público
-  const proxy=`https://api.allorigins.win/get?url=${encodeURIComponent(direct)}`;
+  const base=`https://api.bcb.gov.br/dados/serie/bcdata.sgs.${serie}/dados/ultimos/12?formato=json`;
+  const urls=[
+    `${base}&_=${Date.now()}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(base)}`,
+    `https://api.allorigins.win/get?url=${encodeURIComponent(base)}`
+  ];
 
-  // Tenta direto
-  try{
-    const r=await fetch(direct,{signal:AbortSignal.timeout?AbortSignal.timeout(6000):undefined});
-    if(r.ok){
-      const data=await r.json();
-      if(Array.isArray(data)&&data.length){
-        return parseFloat(String(data[data.length-1].valor).replace(',','.'));
+  for(const url of urls){
+    try{
+      const payload=await fetchJsonComTimeout(url);
+      let data=payload;
+      if(payload && typeof payload.contents==='string'){
+        data=JSON.parse(payload.contents);
       }
-    }
-  }catch{}
-
-  // Fallback proxy
-  try{
-    const r=await fetch(proxy);
-    if(r.ok){
-      const wrapper=await r.json();
-      if(wrapper.contents){
-        const data=JSON.parse(wrapper.contents);
-        if(Array.isArray(data)&&data.length){
-          return parseFloat(String(data[data.length-1].valor).replace(',','.'));
+      if(Array.isArray(data) && data.length){
+        for(let i=data.length-1;i>=0;i--){
+          const valor=parseValorBCB(data[i]?.valor);
+          if(valor!=null) return {
+            valor,
+            data:data[i]?.data||'',
+            serie
+          };
         }
       }
+    }catch(err){
+      console.warn(`Falha ao consultar série BCB ${serie}:`,err);
     }
-  }catch{}
-
+  }
   return null;
 }
 
 async function fetchFocusSelic(){
-  // Série 4390 = Meta SELIC definida pelo Copom (% a.a.) - mais estável
-  // Série 432  = SELIC acumulada no mês (% a.m.) - precisa converter
-  // Usamos 4390 que já vem em % a.a.
-  const val=await fetchBCBSerie(4390);
-  return val;
+  // 432: Meta Selic definida pelo Copom (% a.a.).
+  // 4390 fica como contingência para instalações antigas que já a utilizavam.
+  return (await fetchBCBSerie(432)) || (await fetchBCBSerie(4390));
 }
 
 async function fetchFocusIPCA(){
-  // Série 13522 = IPCA acumulado 12 meses esperado (Focus)
-  // Série 433   = IPCA acumulado mês (% a.m.) - precisa converter
-  // Fallback: série 4175 = expectativa IPCA 12 meses
-  let val=await fetchBCBSerie(13522);
-  if(val==null) val=await fetchBCBSerie(4175);
-  return val;
+  // Expectativa de IPCA em 12 meses; usa série alternativa como contingência.
+  return (await fetchBCBSerie(13522)) || (await fetchBCBSerie(4175));
+}
+
+let _patRatesLoading=false;
+
+async function atualizarTaxasBCB(forcar=false){
+  if(_patRatesLoading) return;
+  _patRatesLoading=true;
+
+  const selicBadge=document.getElementById('pat-selic-badge');
+  const ipcaBadge=document.getElementById('pat-ipca-badge');
+  const btn=document.getElementById('pat-refresh-rates');
+
+  if(selicBadge){
+    selicBadge.className='pat-api-badge pat-api-load';
+    selicBadge.textContent='⏳ Buscando SELIC...';
+  }
+  if(ipcaBadge){
+    ipcaBadge.className='pat-api-badge pat-api-load';
+    ipcaBadge.textContent='⏳ Buscando IPCA...';
+  }
+  if(btn){
+    btn.disabled=true;
+    btn.textContent='⏳ Atualizando...';
+  }
+
+  try{
+    const [selicInfo,ipcaInfo]=await Promise.all([
+      fetchFocusSelic(),
+      fetchFocusIPCA()
+    ]);
+
+    const selicInput=document.getElementById('pat-selic');
+    const ipcaInput=document.getElementById('pat-ipca');
+
+    if(selicInfo){
+      if(selicInput && (forcar || !selicInput.value)) selicInput.value=selicInfo.valor.toFixed(2);
+      const dataTxt=selicInfo.data?` • ${selicInfo.data}`:'';
+      document.getElementById('pat-selic-hint').textContent=`BCB — Meta Selic: ${selicInfo.valor.toFixed(2)}% a.a.${dataTxt}`;
+      selicBadge.className='pat-api-badge pat-api-ok';
+      selicBadge.textContent=`✓ SELIC ${selicInfo.valor.toFixed(2)}% a.a.`;
+    }else{
+      selicBadge.className='pat-api-badge pat-api-err';
+      selicBadge.textContent='✗ Não foi possível consultar';
+      document.getElementById('pat-selic-hint').textContent='A API do BCB não respondeu. Tente “Atualizar taxas” ou preencha manualmente.';
+    }
+
+    if(ipcaInfo){
+      if(ipcaInput && (forcar || !ipcaInput.value)) ipcaInput.value=ipcaInfo.valor.toFixed(2);
+      const dataTxt=ipcaInfo.data?` • ${ipcaInfo.data}`:'';
+      document.getElementById('pat-ipca-hint').textContent=`BCB — IPCA esperado em 12 meses: ${ipcaInfo.valor.toFixed(2)}% a.a.${dataTxt}`;
+      ipcaBadge.className='pat-api-badge pat-api-ok';
+      ipcaBadge.textContent=`✓ IPCA ${ipcaInfo.valor.toFixed(2)}% a.a.`;
+    }else{
+      ipcaBadge.className='pat-api-badge pat-api-err';
+      ipcaBadge.textContent='✗ Não foi possível consultar';
+      document.getElementById('pat-ipca-hint').textContent='A API do BCB não respondeu. Tente “Atualizar taxas” ou preencha manualmente.';
+    }
+  }catch(err){
+    console.error('Erro ao atualizar taxas do BCB:',err);
+    if(selicBadge){
+      selicBadge.className='pat-api-badge pat-api-err';
+      selicBadge.textContent='✗ Erro na consulta';
+    }
+    if(ipcaBadge){
+      ipcaBadge.className='pat-api-badge pat-api-err';
+      ipcaBadge.textContent='✗ Erro na consulta';
+    }
+  }finally{
+    _patRatesLoading=false;
+    if(btn){
+      btn.disabled=false;
+      btn.textContent='↻ Atualizar taxas';
+    }
+  }
 }
 
 async function renderPatrimonio(){
@@ -2388,38 +2478,8 @@ async function renderPatrimonio(){
     `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;background:var(--bg3);border:1px solid var(--border);font-size:11px;color:var(--text3)">${c.icon} ${c.name}</span>`
   ).join('')||'<span style="font-size:11px;color:var(--text3)">Nenhuma excluída</span>';
 
-  // Busca SELIC e IPCA
-  const selicBadge=document.getElementById('pat-selic-badge');
-  const ipcaBadge=document.getElementById('pat-ipca-badge');
-  selicBadge.className='pat-api-badge pat-api-load'; selicBadge.textContent='⏳ Buscando SELIC...';
-  ipcaBadge.className='pat-api-badge pat-api-load'; ipcaBadge.textContent='⏳ Buscando IPCA...';
-
-  const [selicVal,ipcaVal]=await Promise.all([fetchFocusSelic(),fetchFocusIPCA()]);
-
-  if(selicVal!=null){
-    const selicInput=document.getElementById('pat-selic');
-    if(!selicInput.value) selicInput.value=selicVal.toFixed(2);
-    document.getElementById('pat-selic-hint').textContent=`BCB (Meta Copom): ${selicVal.toFixed(2)}% a.a.`;
-    selicBadge.className='pat-api-badge pat-api-ok'; selicBadge.textContent=`✓ SELIC ${selicVal.toFixed(2)}% a.a.`;
-  } else {
-    selicBadge.className='pat-api-badge pat-api-err'; selicBadge.textContent='✗ API indisponível';
-    document.getElementById('pat-selic-hint').textContent='Consulte bcb.gov.br e insira manualmente (ex: 13.75)';
-    // Sugestão do valor atual baseado no contexto (2026)
-    const selicInput=document.getElementById('pat-selic');
-    if(!selicInput.value) selicInput.placeholder='Ex: 13.75';
-  }
-
-  if(ipcaVal!=null){
-    const ipcaInput=document.getElementById('pat-ipca');
-    if(!ipcaInput.value) ipcaInput.value=ipcaVal.toFixed(2);
-    document.getElementById('pat-ipca-hint').textContent=`BCB (Focus 12m): ${ipcaVal.toFixed(2)}% a.a.`;
-    ipcaBadge.className='pat-api-badge pat-api-ok'; ipcaBadge.textContent=`✓ IPCA ${ipcaVal.toFixed(2)}% a.a.`;
-  } else {
-    ipcaBadge.className='pat-api-badge pat-api-err'; ipcaBadge.textContent='✗ API indisponível';
-    document.getElementById('pat-ipca-hint').textContent='Consulte bcb.gov.br e insira manualmente (ex: 5.50)';
-    const ipcaInput=document.getElementById('pat-ipca');
-    if(!ipcaInput.value) ipcaInput.placeholder='Ex: 5.50';
-  }
+  // Busca automaticamente as taxas oficiais do Banco Central.
+  await atualizarTaxasBCB(false);
 
   // guarda base para o cálculo
   _patData={recBase,despBase,includedCats,excludedCats};
