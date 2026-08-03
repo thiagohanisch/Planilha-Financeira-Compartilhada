@@ -252,7 +252,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
     <form id="firebase-login-form" onsubmit="loginWithFirebase(event)">
       <input class="form-input" id="login-email" type="email" autocomplete="username" placeholder="E-mail" required style="margin-bottom:10px;padding:12px 14px">
       <input class="form-input" id="login-password" type="password" autocomplete="current-password" placeholder="Senha" required style="padding:12px 14px">
-      <button class="lock-btn" id="login-btn" type="submit">Entrar</button>
+      <button class="lock-btn" id="login-btn" type="button" onclick="loginWithFirebase(event)">Entrar</button>
     </form>
     <button type="button" onclick="resetFirebasePassword()" style="margin-top:12px;background:none;border:none;color:var(--blue);font-size:12px;cursor:pointer">Esqueci minha senha</button>
     <div class="lock-err" id="lock-err"></div>
@@ -989,7 +989,12 @@ function showApp(){
   document.getElementById('app-root').style.display='flex';
 }
 async function loginWithFirebase(e){
-  if(e)e.preventDefault();
+  if(e&&typeof e.preventDefault==='function')e.preventDefault();
+  if(!auth){
+    setLoginError('O Firebase ainda está inicializando. Aguarde alguns segundos e tente novamente.');
+    try{initFirebase()}catch(err){setLoginError('Falha ao iniciar o Firebase: '+(err?.message||err));}
+    return;
+  }
   setLoginError('');
   if(!firebaseConfigured()){
     setLoginError('Finalize a configuração do Firebase dentro do HTML antes de entrar.');
@@ -2636,10 +2641,27 @@ function toggleMonthlyDetail(){
 }
 
 // ===================== INIT =====================
-(async function init(){
-  await loadAll(); // cache local; a nuvem será baixada antes de liberar o uso
-  populateAllSelects();
-  initFirebase();
+(function bootFinTrack(){
+  // Inicializa o Firebase imediatamente para que o botão de login já funcione.
+  try{initFirebase()}catch(err){
+    showLogin();
+    setLoginError('Falha ao iniciar o Firebase: '+(err?.message||err));
+  }
+  // Carrega o cache local em paralelo, sem bloquear a autenticação.
+  loadAll().then(()=>populateAllSelects()).catch(err=>console.error('Falha ao carregar cache local:',err));
+  const form=document.getElementById('firebase-login-form');
+  if(form){
+    form.addEventListener('submit',loginWithFirebase);
+  }
+  const pass=document.getElementById('login-password');
+  if(pass){
+    pass.addEventListener('keydown',ev=>{if(ev.key==='Enter'){ev.preventDefault();loginWithFirebase(ev)}});
+  }
+  window.addEventListener('error',ev=>{
+    if(document.getElementById('lock-screen')?.style.display!=='none'){
+      setLoginError('Erro no carregamento do sistema: '+(ev.message||'erro desconhecido'));
+    }
+  });
 })();
 </script>
 </body>
