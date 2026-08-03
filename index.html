@@ -674,8 +674,8 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       </div>
       <div class="pat-field">
         <label>📅 Horizonte de projeção (anos)</label>
-        <input class="pat-input" id="pat-anos" type="number" min="1" max="50" value="10" placeholder="Ex: 10">
-        <span class="pat-input-hint">Quantos anos quer projetar</span>
+        <input class="pat-input" id="pat-anos" type="number" min="1" max="10" value="10" placeholder="Ex: 10" onchange="normalizarHorizontePatrimonio();renderSelicFocusTable()">
+        <span class="pat-input-hint">Horizonte permitido: de 1 a 10 anos</span>
       </div>
       <div class="pat-field">
         <label>📈 SELIC de contingência (%)</label>
@@ -726,7 +726,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
         </table>
       </div>
       <div style="font-size:10.5px;color:var(--text3);margin-top:8px">
-        Para anos sem projeção publicada, o sistema repete a última mediana disponível. Caso nenhuma projeção seja retornada, utiliza a taxa de contingência acima.
+        Para anos sem projeção publicada, o sistema mantém a última mediana anual disponível até completar o horizonte máximo de 10 anos. Se o Focus não responder, usa a taxa de contingência.
       </div>
     </div>
 
@@ -2339,7 +2339,25 @@ async function fetchJsonComTimeout(url, timeoutMs=9000){
 }
 
 function parseValorBCB(valor){
-  const n=parseFloat(String(valor??'').replace(/\./g,'').replace(',','.'));
+  if(valor===null || valor===undefined || valor==='') return null;
+  if(typeof valor==='number') return Number.isFinite(valor)?valor:null;
+
+  let s=String(valor).trim().replace(/\s/g,'');
+  if(!s) return null;
+
+  // Quando há ponto e vírgula, o último separador é tratado como decimal.
+  if(s.includes('.') && s.includes(',')){
+    if(s.lastIndexOf(',') > s.lastIndexOf('.')){
+      s=s.replace(/\./g,'').replace(',','.');
+    }else{
+      s=s.replace(/,/g,'');
+    }
+  }else if(s.includes(',')){
+    // Formato brasileiro: 14,25
+    s=s.replace(/\./g,'').replace(',','.');
+  }
+  // Se houver apenas ponto, preserva como separador decimal: 14.25.
+  const n=Number(s);
   return Number.isFinite(n)?n:null;
 }
 
@@ -2437,6 +2455,16 @@ async function fetchFocusSelicAnual(){
   return null;
 }
 
+function normalizarHorizontePatrimonio(){
+  const input=document.getElementById('pat-anos');
+  if(!input) return 10;
+  let anos=parseInt(input.value,10);
+  if(!Number.isFinite(anos)) anos=10;
+  anos=Math.max(1,Math.min(10,anos));
+  input.value=anos;
+  return anos;
+}
+
 function taxaSelicParaAno(ano,fallback){
   const exact=_selicFocusAnual.find(x=>x.ano===ano);
   if(exact) return {taxa:exact.mediana,origem:'Focus'};
@@ -2452,19 +2480,41 @@ function renderSelicFocusTable(){
   const meta=document.getElementById('pat-selic-projection-meta');
   if(!tbody||!meta)return;
 
+  const anos=normalizarHorizontePatrimonio();
+  const anoInicial=new Date().getFullYear();
+  const fallback=parseFloat(document.getElementById('pat-selic')?.value)||0;
+
   if(!_selicFocusAnual.length){
     meta.textContent='O Banco Central não retornou projeções anuais neste momento.';
-    tbody.innerHTML='<tr><td colspan="3" style="padding:12px 10px;color:var(--text3)">Sem projeções disponíveis. Será usada a taxa de contingência.</td></tr>';
+    tbody.innerHTML=Array.from({length:anos},(_,i)=>{
+      const ano=anoInicial+i;
+      return `<tr style="border-bottom:1px solid var(--border)">
+        <td style="padding:8px 10px;font-weight:500">${ano}</td>
+        <td style="padding:8px 10px;text-align:right;font-family:'DM Mono',monospace;color:var(--amber)">${fallback.toFixed(2)}% a.a.</td>
+        <td style="padding:8px 10px;color:var(--text2)">Contingência manual</td>
+      </tr>`;
+    }).join('');
     return;
   }
 
-  meta.textContent=`Última atualização do Focus: ${_selicFocusData||'data não informada'} • ${_selicFocusAnual.length} ano(s) disponível(is)`;
-  tbody.innerHTML=_selicFocusAnual.map((r,i)=>`
-    <tr style="border-bottom:1px solid var(--border)">
-      <td style="padding:8px 10px;font-weight:500">${r.ano}</td>
-      <td style="padding:8px 10px;text-align:right;font-family:'DM Mono',monospace;color:var(--green)">${r.mediana.toFixed(2)}% a.a.</td>
-      <td style="padding:8px 10px;color:var(--text2)">${i===0?'Aplicada ao primeiro ano correspondente':'Aplicada ao ano correspondente'}</td>
-    </tr>`).join('');
+  meta.textContent=`Focus atualizado em ${_selicFocusData||'data não informada'} • horizonte exibido: ${anos} ano(s)`;
+  tbody.innerHTML=Array.from({length:anos},(_,i)=>{
+    const ano=anoInicial+i;
+    const info=taxaSelicParaAno(ano,fallback);
+    const exata=_selicFocusAnual.some(x=>x.ano===ano);
+    const cor=exata?'var(--green)':'var(--amber)';
+    const descricao=exata
+      ?'Projeção anual publicada pelo Focus'
+      :info.origem.startsWith('Última projeção')
+        ?`${info.origem} — mantida constante até o fim do horizonte`
+        :info.origem;
+
+    return `<tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px 10px;font-weight:500">${ano}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:'DM Mono',monospace;color:${cor}">${info.taxa.toFixed(2)}% a.a.</td>
+      <td style="padding:8px 10px;color:var(--text2)">${descricao}</td>
+    </tr>`;
+  }).join('');
 }
 
 let _patRatesLoading=false;
@@ -2609,7 +2659,7 @@ async function renderPatrimonio(){
 function calcularPatrimonio(){
   if(!_patData){alert('Aguarde o carregamento dos dados.');return}
   const saldoInicial=parseFloat(document.getElementById('pat-saldo').value)||0;
-  const anos=parseInt(document.getElementById('pat-anos').value)||10;
+  const anos=normalizarHorizontePatrimonio();
   const selicAnual=parseFloat(document.getElementById('pat-selic').value)||0;
   const ipcaAnual=parseFloat(document.getElementById('pat-ipca').value)||0;
   const crescRec=parseFloat(document.getElementById('pat-cresc-rec').value)||0;
