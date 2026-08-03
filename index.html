@@ -762,7 +762,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 
   <!-- Marcos -->
   <div id="pat-milestones" style="display:none;margin-bottom:18px">
-    <div style="font-size:13px;font-weight:500;margin-bottom:10px">🏆 Marcos projetados</div>
+    <div style="font-size:13px;font-weight:500;margin-bottom:10px">🏆 Marcos projetados — R$ 1M, R$ 2M e R$ 5M</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap" id="pat-milestone-list"></div>
   </div>
 
@@ -2736,7 +2736,7 @@ function calcularPatrimonio(){
   }
 
   // Marcos
-  const milestones=[100000,250000,500000,1000000,2000000,5000000];
+  const milestones=[1000000,2000000,5000000];
   const milestoneResults=milestones.map(target=>{
     const hit=monthly.find(m=>m.saldo>=target);
     return{target,hit};
@@ -2770,20 +2770,72 @@ function calcularPatrimonio(){
   const mileEl=document.getElementById('pat-milestones');
   const mileList=document.getElementById('pat-milestone-list');
   mileEl.style.display='block';
+  const patMonthNames=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
   mileList.innerHTML=milestoneResults.map(({target,hit})=>{
     const reached=!!hit;
-    const label=target>=1000000?`R$ ${(target/1000000).toFixed(0)}M`:`R$ ${(target/1000).toFixed(0)}k`;
-    const when=hit?`Ano ${hit.ano}, mês ${hit.mes}`:'Além do horizonte';
+    const label=`R$ ${(target/1000000).toFixed(0)}M`;
+    const when=hit
+      ?`${patMonthNames[(hit.mes||1)-1]}/${hit.anoCalendario}`
+      :'Além do horizonte';
     return`<span class="pat-milestone ${reached?'reached':''}">
-      ${reached?'✅':'⬜'} ${label}
+      ${reached?'✅':'⏳'} <strong>${label}</strong>
       <span style="font-size:10px;color:${reached?'inherit':'var(--text3)'}">· ${when}</span>
     </span>`;
   }).join('');
+
+  // Marcadores de R$ 1M, R$ 2M e R$ 5M diretamente no gráfico
+  const patMilestonePlugin={
+    id:'patMilestonePlugin',
+    afterDatasetsDraw(chart){
+      const atingidos=milestoneResults.filter(m=>m.hit);
+      if(!atingidos.length)return;
+
+      const {ctx,chartArea,scales}=chart;
+      if(!chartArea||!scales?.x||!scales?.y)return;
+
+      ctx.save();
+      ctx.font='10px DM Sans';
+      ctx.textBaseline='middle';
+
+      atingidos.forEach(({target,hit},idx)=>{
+        const yearIndex=yearly.findIndex(y=>y.anoCalendario===hit.anoCalendario);
+        if(yearIndex<0)return;
+
+        const x=scales.x.getPixelForValue(yearIndex);
+        const y=scales.y.getPixelForValue(target);
+        if(y<chartArea.top||y>chartArea.bottom)return;
+
+        ctx.setLineDash([4,4]);
+        ctx.strokeStyle='rgba(255,255,255,.28)';
+        ctx.lineWidth=1;
+        ctx.beginPath();
+        ctx.moveTo(chartArea.left,y);
+        ctx.lineTo(chartArea.right,y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        const label=`R$ ${(target/1000000).toFixed(0)}M · ${patMonthNames[(hit.mes||1)-1]}/${hit.anoCalendario}`;
+        const width=ctx.measureText(label).width+14;
+        const boxX=Math.min(Math.max(x-width/2,chartArea.left+3),chartArea.right-width-3);
+        const boxY=Math.max(chartArea.top+3,y-23-(idx*2));
+
+        ctx.fillStyle='rgba(15,17,23,.94)';
+        ctx.fillRect(boxX,boxY,width,18);
+        ctx.strokeStyle='rgba(255,255,255,.16)';
+        ctx.strokeRect(boxX,boxY,width,18);
+        ctx.fillStyle='#f0f2f8';
+        ctx.fillText(label,boxX+7,boxY+9);
+      });
+
+      ctx.restore();
+    }
+  };
 
   // Gráfico
   document.getElementById('pat-chart-card').style.display='block';
   chartPatrimonio=dc(chartPatrimonio);
   chartPatrimonio=new Chart(document.getElementById('chart-patrimonio'),{
+    plugins:[patMilestonePlugin],
     type:'line',
     data:{
       labels:yearly.map(y=>String(y.anoCalendario)),
