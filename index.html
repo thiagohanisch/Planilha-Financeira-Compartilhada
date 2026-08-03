@@ -166,6 +166,14 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 .insight-label{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
 .insight-value{font-size:20px;font-weight:600;font-family:'DM Mono',monospace}
 .insight-sub{font-size:11px;color:var(--text2);margin-top:4px}
+.ins-detail-section{margin-top:8px}
+.ins-detail-title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.ins-detail-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px 14px}
+.ins-detail-item{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 11px;min-width:0}
+.ins-detail-item .rank-row{border-bottom:none;padding:0}
+@media(max-width:1024px){.ins-detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.ins-detail-grid{grid-template-columns:1fr}}
+
 /* Patrimônio */
 .pat-input-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
 .pat-field{display:flex;flex-direction:column;gap:5px}
@@ -517,15 +525,18 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       <div id="ins-rank-income"></div>
     </div>
   </div>
-  <div class="content-grid">
-    <div class="chart-card">
-      <div class="chart-header"><div class="chart-title">% de gasto por categoria</div></div>
-      <div style="position:relative;height:260px"><canvas id="chart-ins-cat"></canvas></div>
+  <div class="chart-card" style="margin-bottom:18px">
+    <div class="chart-header"><div class="chart-title">% de gasto por categoria</div></div>
+    <div style="position:relative;height:280px"><canvas id="chart-ins-cat"></canvas></div>
+  </div>
+  <div class="chart-card">
+    <div class="chart-header">
+      <div>
+        <div class="chart-title">Detalhamento por categoria</div>
+        <div style="font-size:10.5px;color:var(--text3);margin-top:2px">Categorias distribuídas em colunas para facilitar a leitura</div>
+      </div>
     </div>
-    <div class="chart-card">
-      <div class="chart-header"><div class="chart-title">Detalhamento por categoria</div></div>
-      <div id="ins-cat-detail"></div>
-    </div>
+    <div id="ins-cat-detail"></div>
   </div>
 </section>
 
@@ -566,7 +577,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
   </div>
   <div class="chart-card" style="margin-bottom:18px">
     <div class="chart-header">
-      <div><div class="chart-title">Mensal — Receitas vs Despesas</div><div style="font-size:10.5px;color:var(--text3);margin-top:2px">Receitas: tons vivos · Despesas: tons escuros e borda reforçada</div></div>
+      <div><div class="chart-title">Mensal — Receitas vs Despesas</div><div style="font-size:10.5px;color:var(--text3);margin-top:2px">Receitas em verde e despesas em vermelho; os tons diferenciam Thiago e Luiza</div></div>
       <div class="legend"><span class="legend-item"><span class="legend-dot" style="background:var(--green)"></span>Receitas</span><span class="legend-item"><span class="legend-dot" style="background:var(--red)"></span>Despesas</span><span class="legend-item"><span class="legend-dot" style="background:var(--blue)"></span>Saldo</span></div>
     </div>
     <div style="position:relative;height:260px"><canvas id="chart-anual"></canvas></div>
@@ -2105,11 +2116,15 @@ function renderInsights(){
   }).join('');
 
   document.getElementById('ins-cat-detail').innerHTML=`
-    ${_viewOwner==='casal'?'<div class="owner-legend" style="margin-bottom:10px"><span><i class="owner-dot owner-thiago"></i>Thiago</span><span><i class="owner-dot owner-luiza"></i>Luiza</span></div>':''}
-    <div style="padding:6px 0;font-size:11px;color:var(--red);text-transform:uppercase;letter-spacing:.5px">Despesas por categoria</div>
-    ${expenseHtml||'<div class="empty">Sem despesas no período</div>'}
-    <div style="padding:14px 0 6px;font-size:11px;color:var(--green);text-transform:uppercase;letter-spacing:.5px">Receitas por categoria</div>
-    ${incomeHtml||'<div class="empty">Sem receitas no período</div>'}`;
+    ${_viewOwner==='casal'?'<div class="owner-legend" style="margin-bottom:12px"><span><i class="owner-dot owner-thiago"></i>Thiago</span><span><i class="owner-dot owner-luiza"></i>Luiza</span></div>':''}
+    <div class="ins-detail-section">
+      <div class="ins-detail-title" style="color:var(--red)">Despesas por categoria</div>
+      <div class="ins-detail-grid">${expenseHtml?expenseHtml.replaceAll('class="rank-row" style="display:block"','class="rank-row ins-detail-item" style="display:block"'):'<div class="empty">Sem despesas no período</div>'}</div>
+    </div>
+    <div class="ins-detail-section" style="margin-top:16px">
+      <div class="ins-detail-title" style="color:var(--green)">Receitas por categoria</div>
+      <div class="ins-detail-grid">${incomeHtml?incomeHtml.replaceAll('class="rank-row" style="display:block"','class="rank-row ins-detail-item" style="display:block"'):'<div class="empty">Sem receitas no período</div>'}</div>
+    </div>`;
 
 }
 
@@ -2157,6 +2172,45 @@ function renderCategorias(){
   catLeg.style.cssText='display:flex;flex-direction:column;gap:7px;margin-top:14px';
 }
 
+
+function annualBreakdownTooltipLabel(ctx){
+  const label=String(ctx.dataset?.label||'');
+  const raw=Number(ctx.raw)||0;
+
+  if(_viewOwner!=='casal'){
+    return `${label}: ${fmt(raw)}`;
+  }
+
+  const lower=label.toLowerCase();
+  const isIncome=lower.includes('receita');
+  const isExpense=lower.includes('despesa');
+
+  if(!isIncome&&!isExpense){
+    return `${label}: ${fmt(raw)}`;
+  }
+
+  const typeWord=isIncome?'receita':'despesa';
+  const datasets=ctx.chart.data.datasets||[];
+  const thiagoDs=datasets.find(ds=>{
+    const l=String(ds.label||'').toLowerCase();
+    return l.includes(typeWord)&&l.includes('thiago');
+  });
+  const luizaDs=datasets.find(ds=>{
+    const l=String(ds.label||'').toLowerCase();
+    return l.includes(typeWord)&&l.includes('luiza');
+  });
+
+  const thiago=Number(thiagoDs?.data?.[ctx.dataIndex])||0;
+  const luiza=Number(luizaDs?.data?.[ctx.dataIndex])||0;
+  const total=thiago+luiza;
+
+  return [
+    `Total: ${fmt(total)}`,
+    `Thiago: ${fmt(thiago)}`,
+    `Luiza: ${fmt(luiza)}`
+  ];
+}
+
 // ===================== ANUAL =====================
 function renderAnual(){
   const year=parseInt(document.getElementById('anual-year')?.value??new Date().getFullYear());
@@ -2167,17 +2221,17 @@ function renderAnual(){
   document.getElementById('anual-income').textContent=fmt(totI);document.getElementById('anual-expense').textContent=fmt(totE);document.getElementById('anual-balance').textContent=fmt(totB);document.getElementById('anual-balance').style.color=totB>=0?'var(--green)':'var(--red)';
   chartAnual=dc(chartAnual);
   const annualDatasets=_viewOwner==='casal'?[
-    {label:'Receitas Thiago',data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='thiago'&&t.type==='income'),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:'rgba(37,99,235,.92)',borderColor:'#60a5fa',borderWidth:1,stack:'receitas',borderRadius:3},
-    {label:'Receitas Luiza',data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='luiza'&&t.type==='income'),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:'rgba(245,158,11,.92)',borderColor:'#fbbf24',borderWidth:1,stack:'receitas',borderRadius:3},
-    {label:'Despesas Thiago',data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='thiago'&&t.type==='expense'),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:'rgba(30,64,175,.78)',borderColor:'#1e3a8a',borderWidth:2,stack:'despesas',borderRadius:3},
-    {label:'Despesas Luiza',data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='luiza'&&t.type==='expense'),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:'rgba(180,83,9,.78)',borderColor:'#92400e',borderWidth:2,stack:'despesas',borderRadius:3},
-    {type:'line',label:'Saldo do casal',data:months.map(x=>x.balance),borderColor:'rgba(34,211,160,.95)',backgroundColor:'transparent',borderWidth:2,pointRadius:3,tension:.3}
+    {label:'Receitas Thiago',data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='thiago'&&t.type==='income'),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:'rgba(22,163,74,.92)',borderColor:'#15803d',borderWidth:1,stack:'receitas',borderRadius:3},
+    {label:'Receitas Luiza',data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='luiza'&&t.type==='income'),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:'rgba(110,231,183,.92)',borderColor:'#34d399',borderWidth:1,stack:'receitas',borderRadius:3},
+    {label:'Despesas Thiago',data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='thiago'&&t.type==='expense'),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:'rgba(185,28,28,.88)',borderColor:'#991b1b',borderWidth:1,stack:'despesas',borderRadius:3},
+    {label:'Despesas Luiza',data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='luiza'&&t.type==='expense'),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:'rgba(251,113,133,.88)',borderColor:'#fb7185',borderWidth:1,stack:'despesas',borderRadius:3},
+    {type:'line',label:'Saldo do casal',data:months.map(x=>x.balance),borderColor:'rgba(96,165,250,.95)',backgroundColor:'transparent',borderWidth:2,pointRadius:3,tension:.3}
   ]:[
     {label:'Receitas',data:months.map(x=>x.income),backgroundColor:'rgba(34,211,160,0.7)',borderRadius:4},
     {label:'Despesas',data:months.map(x=>x.expense),backgroundColor:'rgba(245,101,101,0.7)',borderRadius:4},
     {type:'line',label:'Saldo',data:months.map(x=>x.balance),borderColor:'rgba(96,165,250,0.9)',backgroundColor:'transparent',borderWidth:2,pointRadius:3,tension:0.3}
   ];
-  chartAnual=new Chart(document.getElementById('chart-anual'),{type:'bar',data:{labels:MONTHS_SHORT,datasets:annualDatasets},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:_viewOwner==='casal',labels:{color:'#8b93a8',boxWidth:10}}},scales:{x:{stacked:_viewOwner==='casal',grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b93a8'}},y:{stacked:_viewOwner==='casal',grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b93a8',callback:v=>'R$'+(v/1000).toFixed(0)+'k'}}}}});
+  chartAnual=new Chart(document.getElementById('chart-anual'),{type:'bar',data:{labels:MONTHS_SHORT,datasets:annualDatasets},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'nearest',intersect:true},plugins:{legend:{display:_viewOwner==='casal',labels:{color:'#8b93a8',boxWidth:10}},tooltip:{callbacks:{label:annualBreakdownTooltipLabel}}},scales:{x:{stacked:_viewOwner==='casal',grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b93a8'}},y:{stacked:_viewOwner==='casal',grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b93a8',callback:v=>'R$'+(v/1000).toFixed(0)+'k'}}}}});
   document.getElementById('anual-tbody').innerHTML=months.map(m=>{
     const bc=m.balance>=0?'var(--green)':'var(--red)';
     const incColor=m.income<0?'var(--amber)':'var(--green)';
@@ -2202,14 +2256,14 @@ function renderCatAnual(){
   const avg=actv.length?actv.reduce((s,m)=>s+m.total,0)/actv.length:0;
   chartCatAnual=dc(chartCatAnual);
   const catAnnualDatasets=_viewOwner==='casal'?[
-    {label:`${type==='income'?'Receita':'Despesa'} — Thiago`,data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='thiago'&&t.type===type&&t.category===catId),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:type==='income'?'rgba(37,99,235,.92)':'rgba(30,64,175,.78)',borderColor:type==='income'?'#60a5fa':'#1e3a8a',borderWidth:type==='income'?1:2,stack:'categoria',borderRadius:4},
-    {label:`${type==='income'?'Receita':'Despesa'} — Luiza`,data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='luiza'&&t.type===type&&t.category===catId),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:type==='income'?'rgba(245,158,11,.92)':'rgba(180,83,9,.78)',borderColor:type==='income'?'#fbbf24':'#92400e',borderWidth:type==='income'?1:2,stack:'categoria',borderRadius:4},
+    {label:`${type==='income'?'Receita':'Despesa'} — Thiago`,data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='thiago'&&t.type===type&&t.category===catId),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:type==='income'?'rgba(22,163,74,.92)':'rgba(185,28,28,.88)',borderColor:type==='income'?'#15803d':'#991b1b',borderWidth:1,stack:'categoria',borderRadius:4},
+    {label:`${type==='income'?'Receita':'Despesa'} — Luiza`,data:MONTHS_SHORT.map((_,m)=>filterTx(_db.transactions.filter(t=>t.owner==='luiza'&&t.type===type&&t.category===catId),m,year).reduce((s,t)=>s+t.amount,0)),backgroundColor:type==='income'?'rgba(110,231,183,.92)':'rgba(251,113,133,.88)',borderColor:type==='income'?'#34d399':'#fb7185',borderWidth:1,stack:'categoria',borderRadius:4},
     {type:'line',label:'Média do casal',data:monthData.map(()=>avg),borderColor:'rgba(255,255,255,.35)',borderDash:[4,4],borderWidth:1.5,pointRadius:0,backgroundColor:'transparent'}
   ]:[
     {label:cat.name,data:monthData.map(x=>x.total),backgroundColor:monthData.map(x=>x.total>0?cat.color+'bb':'rgba(255,255,255,0.05)'),borderColor:cat.color,borderWidth:1,borderRadius:5},
     {type:'line',label:'Média',data:monthData.map(()=>avg),borderColor:'rgba(255,255,255,0.25)',borderDash:[4,4],borderWidth:1.5,pointRadius:0,backgroundColor:'transparent'}
   ];
-  chartCatAnual=new Chart(document.getElementById('chart-cat-anual'),{type:'bar',data:{labels:monthData.map(x=>x.short),datasets:catAnnualDatasets},options:{responsive:true,maintainAspectRatio:false,onClick:(evt,elements)=>{if(elements?.length&&elements[0].datasetIndex<(_viewOwner==='casal'?2:1))openCategoryHistory(year,elements[0].index,type,catId)},plugins:{legend:{display:_viewOwner==='casal',labels:{color:'#8b93a8',boxWidth:10}},tooltip:{callbacks:{label:ctx=>` ${fmt(ctx.raw)}`,afterLabel:ctx=>ctx.datasetIndex<(_viewOwner==='casal'?2:1)?' Clique para abrir o histórico':''}}},scales:{x:{stacked:_viewOwner==='casal',grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b93a8'}},y:{stacked:_viewOwner==='casal',grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b93a8',callback:v=>'R$'+(v/1000).toFixed(1)+'k'}}}}});
+  chartCatAnual=new Chart(document.getElementById('chart-cat-anual'),{type:'bar',data:{labels:monthData.map(x=>x.short),datasets:catAnnualDatasets},options:{responsive:true,maintainAspectRatio:false,onClick:(evt,elements)=>{if(elements?.length&&elements[0].datasetIndex<(_viewOwner==='casal'?2:1))openCategoryHistory(year,elements[0].index,type,catId)},plugins:{legend:{display:_viewOwner==='casal',labels:{color:'#8b93a8',boxWidth:10}},tooltip:{callbacks:{label:annualBreakdownTooltipLabel,afterLabel:ctx=>ctx.datasetIndex<(_viewOwner==='casal'?2:1)?' Clique para abrir o histórico':''}}},scales:{x:{stacked:_viewOwner==='casal',grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b93a8'}},y:{stacked:_viewOwner==='casal',grid:{color:'rgba(255,255,255,0.05)'},ticks:{color:'#8b93a8',callback:v=>'R$'+(v/1000).toFixed(1)+'k'}}}}});
   const best=monthData.reduce((a,b)=>b.total>a.total?b:a,monthData[0]);
   document.getElementById('cat-anual-summary').innerHTML=[`<span style="background:var(--bg3);padding:5px 12px;border-radius:8px">📦 Total: <strong style="color:${cat.color}">${fmt(annual)}</strong></span>`,`<span style="background:var(--bg3);padding:5px 12px;border-radius:8px">📊 Média: <strong>${fmt(avg)}</strong></span>`,best.total>0?`<span style="background:var(--bg3);padding:5px 12px;border-radius:8px">🏆 Maior: <strong>${best.name} (${fmt(best.total)})</strong></span>`:'',`<span style="background:var(--bg3);padding:5px 12px;border-radius:8px">🔢 Lançamentos: <strong>${monthData.reduce((s,m)=>s+m.count,0)}</strong></span>`].join('');
 }
