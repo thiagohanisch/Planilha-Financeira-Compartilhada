@@ -678,9 +678,9 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
         <span class="pat-input-hint">Quantos anos quer projetar</span>
       </div>
       <div class="pat-field">
-        <label>📈 SELIC anual projetada (%)</label>
+        <label>📈 SELIC de contingência (%)</label>
         <input class="pat-input" id="pat-selic" type="number" step="0.01" placeholder="Buscando...">
-        <span class="pat-input-hint" id="pat-selic-hint">Buscando Boletim Focus...</span>
+        <span class="pat-input-hint" id="pat-selic-hint">Usada apenas quando o Focus não trouxer projeção para determinado ano.</span>
       </div>
       <div class="pat-field">
         <label>📊 IPCA anual projetado (%)</label>
@@ -701,6 +701,32 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
         <label>➕ Aporte extra mensal (R$)</label>
         <input class="pat-input" id="pat-aporte" type="number" step="0.01" value="0" placeholder="0">
         <span class="pat-input-hint">Depósito adicional todo mês</span>
+      </div>
+    </div>
+
+    <div id="pat-selic-projection-card" style="background:var(--bg3);border-radius:var(--radius-sm);padding:14px 16px;margin-top:4px;margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div>
+          <div style="font-size:12px;color:var(--text2);font-weight:500">Projeção anual da SELIC — Boletim Focus/BCB</div>
+          <div id="pat-selic-projection-meta" style="font-size:10.5px;color:var(--text3);margin-top:2px">Buscando projeções para os próximos anos...</div>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead>
+            <tr style="border-bottom:1px solid var(--border)">
+              <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:500">Ano</th>
+              <th style="padding:8px 10px;text-align:right;color:var(--text2);font-weight:500">Mediana Focus</th>
+              <th style="padding:8px 10px;text-align:left;color:var(--text2);font-weight:500">Aplicação no cálculo</th>
+            </tr>
+          </thead>
+          <tbody id="pat-selic-projection-tbody">
+            <tr><td colspan="3" style="padding:12px 10px;color:var(--text3)">Consultando Banco Central...</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="font-size:10.5px;color:var(--text3);margin-top:8px">
+        Para anos sem projeção publicada, o sistema repete a última mediana disponível. Caso nenhuma projeção seja retornada, utiliza a taxa de contingência acima.
       </div>
     </div>
 
@@ -770,6 +796,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
             <th>Receita</th>
             <th>Despesa</th>
             <th>Fluxo</th>
+            <th>SELIC usada</th>
             <th>Rendimento</th>
             <th>Patrimônio Nominal</th>
             <th>Valor Real</th>
@@ -2359,6 +2386,87 @@ async function fetchFocusIPCA(){
   return (await fetchBCBSerie(13522)) || (await fetchBCBSerie(4175));
 }
 
+
+let _selicFocusAnual=[];
+let _selicFocusData='';
+
+async function fetchFocusSelicAnual(){
+  const filtro=encodeURIComponent("Indicador eq 'Selic'");
+  const base=`https://olinda.bcb.gov.br/olinda/servico/Expectativas/versao/v1/odata/ExpectativasMercadoAnuais?$top=500&$filter=${filtro}&$orderby=Data%20desc&$format=json`;
+  const urls=[
+    `${base}&_=${Date.now()}`,
+    `https://api.allorigins.win/raw?url=${encodeURIComponent(base)}`,
+    `https://api.allorigins.win/get?url=${encodeURIComponent(base)}`
+  ];
+
+  for(const url of urls){
+    try{
+      const payload=await fetchJsonComTimeout(url,12000);
+      let obj=payload;
+      if(payload && typeof payload.contents==='string') obj=JSON.parse(payload.contents);
+      const rows=Array.isArray(obj?.value)?obj.value:(Array.isArray(obj)?obj:[]);
+      if(!rows.length) continue;
+
+      const valid=rows
+        .map(r=>({
+          ano:Number(r.DataReferencia),
+          mediana:Number(r.Mediana),
+          media:Number(r.Media),
+          data:String(r.Data||''),
+          baseCalculo:r.baseCalculo
+        }))
+        .filter(r=>Number.isFinite(r.ano)&&Number.isFinite(r.mediana));
+
+      if(!valid.length) continue;
+
+      valid.sort((a,b)=>String(b.data).localeCompare(String(a.data)));
+      const latestDate=valid[0].data;
+      const latest=valid.filter(r=>r.data===latestDate);
+      const byYear=new Map();
+
+      latest.forEach(r=>{
+        if(!byYear.has(r.ano)) byYear.set(r.ano,r);
+      });
+
+      const result=[...byYear.values()].sort((a,b)=>a.ano-b.ano);
+      if(result.length) return {data:latestDate,projecoes:result};
+    }catch(err){
+      console.warn('Falha ao consultar projeções anuais Focus:',err);
+    }
+  }
+  return null;
+}
+
+function taxaSelicParaAno(ano,fallback){
+  const exact=_selicFocusAnual.find(x=>x.ano===ano);
+  if(exact) return {taxa:exact.mediana,origem:'Focus'};
+  const anteriores=_selicFocusAnual.filter(x=>x.ano<ano).sort((a,b)=>b.ano-a.ano);
+  if(anteriores.length) return {taxa:anteriores[0].mediana,origem:`Última projeção (${anteriores[0].ano})`};
+  const futuras=_selicFocusAnual.filter(x=>x.ano>ano).sort((a,b)=>a.ano-b.ano);
+  if(futuras.length) return {taxa:futuras[0].mediana,origem:`Primeira projeção (${futuras[0].ano})`};
+  return {taxa:fallback,origem:'Contingência manual'};
+}
+
+function renderSelicFocusTable(){
+  const tbody=document.getElementById('pat-selic-projection-tbody');
+  const meta=document.getElementById('pat-selic-projection-meta');
+  if(!tbody||!meta)return;
+
+  if(!_selicFocusAnual.length){
+    meta.textContent='O Banco Central não retornou projeções anuais neste momento.';
+    tbody.innerHTML='<tr><td colspan="3" style="padding:12px 10px;color:var(--text3)">Sem projeções disponíveis. Será usada a taxa de contingência.</td></tr>';
+    return;
+  }
+
+  meta.textContent=`Última atualização do Focus: ${_selicFocusData||'data não informada'} • ${_selicFocusAnual.length} ano(s) disponível(is)`;
+  tbody.innerHTML=_selicFocusAnual.map((r,i)=>`
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px 10px;font-weight:500">${r.ano}</td>
+      <td style="padding:8px 10px;text-align:right;font-family:'DM Mono',monospace;color:var(--green)">${r.mediana.toFixed(2)}% a.a.</td>
+      <td style="padding:8px 10px;color:var(--text2)">${i===0?'Aplicada ao primeiro ano correspondente':'Aplicada ao ano correspondente'}</td>
+    </tr>`).join('');
+}
+
 let _patRatesLoading=false;
 
 async function atualizarTaxasBCB(forcar=false){
@@ -2383,10 +2491,20 @@ async function atualizarTaxasBCB(forcar=false){
   }
 
   try{
-    const [selicInfo,ipcaInfo]=await Promise.all([
+    const [selicInfo,ipcaInfo,selicFocus]=await Promise.all([
       fetchFocusSelic(),
-      fetchFocusIPCA()
+      fetchFocusIPCA(),
+      fetchFocusSelicAnual()
     ]);
+
+    if(selicFocus?.projecoes?.length){
+      _selicFocusAnual=selicFocus.projecoes;
+      _selicFocusData=selicFocus.data||'';
+    }else{
+      _selicFocusAnual=[];
+      _selicFocusData='';
+    }
+    renderSelicFocusTable();
 
     const selicInput=document.getElementById('pat-selic');
     const ipcaInput=document.getElementById('pat-ipca');
@@ -2396,7 +2514,9 @@ async function atualizarTaxasBCB(forcar=false){
       const dataTxt=selicInfo.data?` • ${selicInfo.data}`:'';
       document.getElementById('pat-selic-hint').textContent=`BCB — Meta Selic: ${selicInfo.valor.toFixed(2)}% a.a.${dataTxt}`;
       selicBadge.className='pat-api-badge pat-api-ok';
-      selicBadge.textContent=`✓ SELIC ${selicInfo.valor.toFixed(2)}% a.a.`;
+      selicBadge.textContent=_selicFocusAnual.length
+        ?`✓ Focus: ${_selicFocusAnual.length} ano(s)`
+        :`✓ SELIC ${selicInfo.valor.toFixed(2)}% a.a.`;
     }else{
       selicBadge.className='pat-api-badge pat-api-err';
       selicBadge.textContent='✗ Não foi possível consultar';
@@ -2425,6 +2545,7 @@ async function atualizarTaxasBCB(forcar=false){
       ipcaBadge.textContent='✗ Erro na consulta';
     }
   }finally{
+    renderSelicFocusTable();
     _patRatesLoading=false;
     if(btn){
       btn.disabled=false;
@@ -2498,8 +2619,8 @@ function calcularPatrimonio(){
   if(!saldoInicial){alert('Informe o saldo atual aplicado.');return}
   if(!selicAnual){alert('Informe a taxa SELIC.');return}
 
-  const selicMensal=(Math.pow(1+selicAnual/100,1/12)-1);
   const ipcaMensal=(Math.pow(1+ipcaAnual/100,1/12)-1);
+  const anoCalendarioInicial=new Date().getFullYear();
 
   const {recBase,despBase}=_patData;
 
@@ -2512,6 +2633,10 @@ function calcularPatrimonio(){
   const yearly=[];
 
   for(let ano=1;ano<=anos;ano++){
+    const anoCalendario=anoCalendarioInicial+ano-1;
+    const selicAnoInfo=taxaSelicParaAno(anoCalendario,selicAnual);
+    const selicAno=selicAnoInfo.taxa;
+    const selicMensal=(Math.pow(1+selicAno/100,1/12)-1);
     const recAnual=recBase*Math.pow(1+crescRec/100,ano-1);
     const despAnual=despBase*Math.pow(1+crescDesp/100,ano-1);
     const recMes=recAnual;
@@ -2533,7 +2658,7 @@ function calcularPatrimonio(){
       deflator*=(1+ipcaMensal);
 
       monthly.push({
-        ano,mes,
+        ano,mes,anoCalendario,selicAno,selicOrigem:selicAnoInfo.origem,
         saldo,
         saldobReal:saldo/deflator,
         rend,
@@ -2546,6 +2671,9 @@ function calcularPatrimonio(){
 
     yearly.push({
       ano,
+      anoCalendario,
+      selicAno,
+      selicOrigem:selicAnoInfo.origem,
       saldoInicio:saldoInicioAno,
       saldoFim:saldo,
       saldoReal:saldo/deflator,
@@ -2608,7 +2736,7 @@ function calcularPatrimonio(){
   chartPatrimonio=new Chart(document.getElementById('chart-patrimonio'),{
     type:'line',
     data:{
-      labels:yearly.map(y=>'Ano '+y.ano),
+      labels:yearly.map(y=>String(y.anoCalendario)),
       datasets:[
         {
           label:'Patrimônio Nominal',
@@ -2672,10 +2800,11 @@ function renderPatTable(showMonthly){
       const isHighlight=(y.ano===1||y.ano===5||y.ano===10);
       const balColor=y.fluxoTotal>=0?'var(--green)':'var(--red)';
       return`<tr class="${isHighlight?'highlight-year':''}">
-        <td>Ano ${y.ano}</td>
+        <td>${y.anoCalendario} <span style="color:var(--text3);font-size:10px">(Ano ${y.ano})</span></td>
         <td style="color:var(--green)">${fmt(y.recTotal)}</td>
         <td style="color:var(--red)">${fmt(y.despTotal)}</td>
         <td style="color:${balColor}">${y.fluxoTotal>=0?'+':''}${fmt(y.fluxoTotal)}</td>
+        <td style="color:var(--blue)">${y.selicAno.toFixed(2)}%<div style="font-size:9px;color:var(--text3)">${y.selicOrigem}</div></td>
         <td style="color:var(--amber)">${fmt(y.rendAnual)}</td>
         <td style="color:var(--green);font-weight:600">${fmt(y.saldoFim)}</td>
         <td style="color:var(--blue)">${fmt(y.saldoReal)}</td>
@@ -2685,10 +2814,11 @@ function renderPatTable(showMonthly){
     tbody.innerHTML=(window._patMonthly||[]).map(m=>{
       const balColor=m.fluxo>=0?'var(--green)':'var(--red)';
       return`<tr>
-        <td style="color:var(--text2);font-weight:400">Ano ${m.ano} · ${MONTHS_SHORT[m.mes-1]}</td>
+        <td style="color:var(--text2);font-weight:400">${m.anoCalendario} · ${MONTHS_SHORT[m.mes-1]}</td>
         <td style="color:var(--green)">${fmt(m.rec)}</td>
         <td style="color:var(--red)">${fmt(m.desp)}</td>
         <td style="color:${balColor}">${m.fluxo>=0?'+':''}${fmt(m.fluxo)}</td>
+        <td style="color:var(--blue)">${m.selicAno.toFixed(2)}%</td>
         <td style="color:var(--amber)">${fmt(m.rend)}</td>
         <td style="color:var(--green);font-weight:600">${fmt(m.saldo)}</td>
         <td style="color:var(--blue)">${fmt(m.saldobReal)}</td>
