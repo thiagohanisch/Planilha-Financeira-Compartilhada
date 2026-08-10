@@ -2504,39 +2504,54 @@ function cloudPayload(){
 }
 async function syncToCloud(showFeedback=false){
   if(!auth?.currentUser||!realtimeDb)throw new Error('Usuário não autenticado.');
+  const uid=auth.currentUser.uid;
+  const dirty=[..._localDirtyIds];
+  const deleted=[..._localDeletedIds];
+  const localMap=txArrayToMap(_db.transactions);
   try{
     if(showFeedback)logCloud('⏳ Enviando alterações...');
 
-    const updates={};
-    const localMap=txArrayToMap(_db.transactions);
+    // Grava cada transação individualmente. Isso evita que uma falha de permissão
+    // em um único caminho impeça todo o lote e torna o erro identificável.
+    const writes=[];
+    for(const id of dirty){
+      const tx=localMap[id];
+      if(!tx)continue;
+      writes.push(
+        realtimeDb.ref('fintrack/transactions').child(String(id)).set({
+          ...tx,
+          updatedAt:firebase.database.ServerValue.TIMESTAMP,
+          updatedBy:uid
+        })
+      );
+    }
+    for(const id of deleted){
+      writes.push(realtimeDb.ref('fintrack/transactions').child(String(id)).remove());
+    }
 
-    _localDirtyIds.forEach(id=>{
-      if(localMap[id])updates[`fintrack/transactions/${id}`]={
-        ...localMap[id],
-        updatedAt:firebase.database.ServerValue.TIMESTAMP,
-        updatedBy:auth.currentUser.uid
-      };
+    // Metadados e configurações são enviados separadamente das transações.
+    writes.push(realtimeDb.ref('fintrack/categories').set(JSON.stringify(_cats)));
+    writes.push(realtimeDb.ref('fintrack/imports').set(JSON.stringify(_imports)));
+    writes.push(realtimeDb.ref('fintrack/metadata').update({
+      updated:firebase.database.ServerValue.TIMESTAMP,
+      updatedBy:uid
+    }));
+
+    await Promise.all(writes);
+
+    dirty.forEach(id=>{
+      if(localMap[id])_cloudTxMap[id]=localMap[id];
     });
-    _localDeletedIds.forEach(id=>{
-      updates[`fintrack/transactions/${id}`]=null;
-    });
-
-    updates['fintrack/categories']=JSON.stringify(_cats);
-    updates['fintrack/imports']=JSON.stringify(_imports);
-    updates['fintrack/metadata/updated']=firebase.database.ServerValue.TIMESTAMP;
-    updates['fintrack/metadata/updatedBy']=auth.currentUser.uid;
-
-    await realtimeDb.ref().update(updates);
-
-    _localDirtyIds.forEach(id=>{if(localMap[id])_cloudTxMap[id]=localMap[id]});
-    _localDeletedIds.forEach(id=>delete _cloudTxMap[id]);
-    _localDirtyIds.clear();
-    _localDeletedIds.clear();
+    deleted.forEach(id=>delete _cloudTxMap[id]);
+    dirty.forEach(id=>_localDirtyIds.delete(id));
+    deleted.forEach(id=>_localDeletedIds.delete(id));
 
     logCloud('✓ Alterações sincronizadas em '+new Date().toLocaleTimeString('pt-BR'));
+    return true;
   }catch(err){
     logCloud('✗ Erro ao enviar: '+err.message);
-    if(showFeedback)alert('Não foi possível enviar os dados.\n'+err.message);
+    // Não limpamos a fila: a operação será tentada novamente.
+    if(showFeedback)alert('Não foi possível enviar os dados ao Firebase.\n\n'+err.message);
     throw err;
   }
 }
@@ -2632,6 +2647,10 @@ async function syncFromCloud(showFeedback=false){
 }
 
 function logCloud(msg){const el=document.getElementById('cloud-log');if(el)el.innerHTML=msg+'<br>'+el.innerHTML}
+function firebaseSyncDiagnostics(){
+  const u=auth?.currentUser;
+  return {uid:u?.uid||null,email:u?.email||null,cloudLoaded:_cloudLoaded,dirty:_localDirtyIds.size,deleted:_localDeletedIds.size,transactions:_db.transactions.length};
+}
 
 // ===================== RESET =====================
 function renderResetSection(){
