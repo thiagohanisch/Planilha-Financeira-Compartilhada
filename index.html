@@ -1183,6 +1183,8 @@ const PROFILE_EMAIL_PREFIXES={thiago:'thiagohanisch',luiza:'lcarn'};
 let firebaseApp=null,auth=null,realtimeDb=null;
 let _authReady=false,_cloudLoaded=false,_appOpening=false,_syncTimer=null,_syncInProgress=false,_syncPending=false,_suppressAutoSync=false;
 let _cloudTxMap={},_localDirtyIds=new Set(),_localDeletedIds=new Set(),_transactionsListener=null;
+let _categoriesListener=null,_importsListener=null,_cloudRefreshInProgress=false;
+let _lastCloudSyncAt=0;
 
 function firebaseConfigured(){
   return !Object.values(FIREBASE_CONFIG).some(v=>String(v).includes('COLE_AQUI'));
@@ -1241,8 +1243,7 @@ async function resetFirebasePassword(){
 }
 async function logoutProfile(){
   try{
-    if(realtimeDb&&_transactionsListener)realtimeDb.ref('fintrack/transactions').off('value',_transactionsListener);
-    _transactionsListener=null;
+    detachCloudListeners();
     if(auth)await auth.signOut();
   }catch{}
   _currentProfile=null;_viewOwner='casal';_cloudLoaded=false;
@@ -1261,6 +1262,8 @@ async function handleAuthenticatedUser(user){
     const btn=document.getElementById('login-btn');if(btn){btn.disabled=true;btn.textContent='Carregando...'}
     await syncFromCloud(false);
     _cloudLoaded=true;
+    attachTransactionsListener();
+    _lastCloudSyncAt=Date.now();
     updateProfileUI();populateAllSelects();refreshAll();renderCloudSection();showApp();
   }catch(err){showLogin();setLoginError('Falha ao carregar os dados: '+err.message)}
   finally{_appOpening=false;const sub=document.getElementById('lock-sub');if(sub)sub.textContent='Entre com sua conta autorizada'}
@@ -2520,7 +2523,7 @@ async function deleteCat(type,id){
 function renderCloudSection(){
   const user=auth?.currentUser;
   const badge=document.getElementById('sync-status-badge');
-  if(user&&_cloudLoaded){badge.className='sync-status sync-ok';badge.innerHTML='<span class="sync-dot ok"></span>Firebase protegido e sincronizado'}
+  if(user&&_cloudLoaded){badge.className='sync-status sync-ok';badge.innerHTML='<span class="sync-dot ok"></span>Firebase conectado · '+(_lastCloudSyncAt?'última atualização '+new Date(_lastCloudSyncAt).toLocaleTimeString('pt-BR'):'sincronizando...')}
   else{badge.className='sync-status sync-local';badge.innerHTML='<span class="sync-dot local"></span>Aguardando autenticação'}
   const emailEl=document.getElementById('cloud-user-email');if(emailEl)emailEl.textContent=user?.email||'—';
   const profileEl=document.getElementById('cloud-user-profile');if(profileEl)profileEl.textContent=_currentProfile?profileName(_currentProfile):'—';
@@ -2609,8 +2612,17 @@ async function migrateLegacyCloudIfNeeded(data){
     imports:data.imports
   };
 }
-function attachTransactionsListener(){
+function detachCloudListeners(){
+  if(!realtimeDb)return;
   if(_transactionsListener)realtimeDb.ref('fintrack/transactions').off('value',_transactionsListener);
+  if(_categoriesListener)realtimeDb.ref('fintrack/categories').off('value',_categoriesListener);
+  if(_importsListener)realtimeDb.ref('fintrack/imports').off('value',_importsListener);
+  _transactionsListener=null;_categoriesListener=null;_importsListener=null;
+}
+
+function attachTransactionsListener(){
+  detachCloudListeners();
+
   _transactionsListener=async snap=>{
     const remote=snap.val()||{};
     _cloudTxMap=remote;
@@ -2618,20 +2630,83 @@ function attachTransactionsListener(){
     const localMap=txArrayToMap(_db.transactions);
     const merged={...remote};
 
+    // Nunca descartamos uma alteração local que ainda não foi enviada.
     _localDirtyIds.forEach(id=>{if(localMap[id])merged[firebaseSafeKey(id)]=localMap[id]});
     _localDeletedIds.forEach(id=>delete merged[firebaseSafeKey(id)]);
 
     _suppressAutoSync=true;
-    await saveDB({transactions:txMapToArray(merged)});
-    _suppressAutoSync=false;
+    try{
+      await saveDB({transactions:txMapToArray(merged)});
+    }finally{
+      _suppressAutoSync=false;
+    }
+
     populateAllSelects();
     refreshAll();
-    logCloud('↻ Atualização em tempo real recebida às '+new Date().toLocaleTimeString('pt-BR'));
+    _lastCloudSyncAt=Date.now();
+    renderCloudSection();
+    logCloud('↻ Transações atualizadas em tempo real às '+new Date().toLocaleTimeString('pt-BR'));
   };
+
+  _categoriesListener=snap=>{
+    const value=snap.val();
+    if(value==null)return;
+    try{
+      _suppressAutoSync=true;
+      _cats=JSON.parse(value);
+      store.set(CATS_KEY,value);
+      _suppressAutoSync=false;
+      populateAllSelects();
+      refreshAll();
+      logCloud('↻ Categorias atualizadas em tempo real');
+    }catch(err){
+      _suppressAutoSync=false;
+      logCloud('✗ Erro ao atualizar categorias: '+err.message);
+    }
+  };
+
+  _importsListener=snap=>{
+    const value=snap.val();
+    if(value==null)return;
+    try{
+      _suppressAutoSync=true;
+      _imports=JSON.parse(value);
+      store.set(IMP_KEY,value);
+      _suppressAutoSync=false;
+      logCloud('↻ Histórico de importações atualizado em tempo real');
+    }catch(err){
+      _suppressAutoSync=false;
+      logCloud('✗ Erro ao atualizar importações: '+err.message);
+    }
+  };
+
   realtimeDb.ref('fintrack/transactions').on('value',_transactionsListener,err=>{
-    logCloud('✗ Falha no acompanhamento em tempo real: '+err.message);
+    logCloud('✗ Falha no acompanhamento das transações: '+err.message);
+  });
+  realtimeDb.ref('fintrack/categories').on('value',_categoriesListener,err=>{
+    logCloud('✗ Falha no acompanhamento das categorias: '+err.message);
+  });
+  realtimeDb.ref('fintrack/imports').on('value',_importsListener,err=>{
+    logCloud('✗ Falha no acompanhamento das importações: '+err.message);
   });
 }
+async function refreshCloudSafely(showFeedback=false){
+  if(!auth?.currentUser||!realtimeDb||_cloudRefreshInProgress)return;
+  _cloudRefreshInProgress=true;
+  try{
+    if(_localDirtyIds.size||_localDeletedIds.size){
+      await syncToCloud(false);
+    }
+    await syncFromCloud(showFeedback);
+    _lastCloudSyncAt=Date.now();
+    renderCloudSection();
+  }catch(err){
+    logCloud('✗ Falha na atualização segura: '+err.message);
+  }finally{
+    _cloudRefreshInProgress=false;
+  }
+}
+
 async function syncFromCloud(showFeedback=false){
   if(!auth?.currentUser||!realtimeDb)throw new Error('Usuário não autenticado.');
   try{
@@ -3522,6 +3597,23 @@ function toggleMonthlyDetail(){
   const show=document.getElementById('pat-show-monthly')?.checked;
   renderPatTable(show);
 }
+
+// Sincronização adicional ao voltar para a aba/janela.
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible' && auth?.currentUser && _cloudLoaded){
+    refreshCloudSafely(false);
+  }
+});
+window.addEventListener('focus',()=>{
+  if(auth?.currentUser && _cloudLoaded){
+    refreshCloudSafely(false);
+  }
+});
+window.addEventListener('online',()=>{
+  if(auth?.currentUser && _cloudLoaded){
+    refreshCloudSafely(true);
+  }
+});
 
 // ===================== INIT =====================
 (function bootFinTrack(){
