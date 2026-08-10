@@ -1450,19 +1450,21 @@ async function saveImports(a){
 
 async function saveDBAndSync(db){
   await saveDB(db);
-  if(_suppressAutoSync)return;
+  if(_suppressAutoSync)return true;
   if(auth?.currentUser && realtimeDb){
     try{
-      // O cadastro/edição/exclusão só é considerado sincronizado após o Firebase confirmar.
+      // Só retorna sucesso depois que o Firebase confirmar a gravação.
       await syncToCloud(false);
+      return true;
     }catch(err){
-      // A fila permanece intacta para uma nova tentativa.
-      logCloud('⚠ Alteração salva neste aparelho, mas ainda não confirmada no Firebase: '+err.message);
+      // Mantém os IDs pendentes para nova tentativa e propaga o erro para a interface.
+      logCloud('⚠ Alteração NÃO confirmada no Firebase: '+err.message);
       scheduleAutoSync();
-      // Não bloqueia a interface: a transação continua pendente e será reenviada.
+      throw err;
     }
   }else{
     scheduleAutoSync();
+    throw new Error('Firebase ainda não está conectado/autenticado.');
   }
 }
 function scheduleAutoSync(){
@@ -1732,20 +1734,20 @@ async function saveTransaction(){
 
       if(sharedChecked){
         db.transactions.unshift({
-          id:Date.now().toString()+Math.random().toString(36).slice(2),type:currentType,description:desc,
+          id:generateTransactionId(),type:currentType,description:desc,
           amount:parseFloat((amount*minePct/100).toFixed(2)),date:ds,category:cat,
           owner:_currentProfile,shared:true,groupId:monthGroup,sharedTotal:amount,splitPct:minePct,paidBy:_currentProfile,
           recurring:true,recurringGroup,recurringNum:i+1,recurringTotal:months
         });
         db.transactions.unshift({
-          id:Date.now().toString()+Math.random().toString(36).slice(2),type:currentType,description:desc,
+          id:generateTransactionId(),type:currentType,description:desc,
           amount:parseFloat((amount*partnerPct/100).toFixed(2)),date:ds,category:cat,
           owner:partner,shared:true,groupId:monthGroup,sharedTotal:amount,splitPct:partnerPct,paidBy:_currentProfile,
           recurring:true,recurringGroup,recurringNum:i+1,recurringTotal:months
         });
       }else{
         db.transactions.unshift({
-          id:Date.now().toString()+Math.random().toString(36).slice(2),type:currentType,description:desc,
+          id:generateTransactionId(),type:currentType,description:desc,
           amount,date:ds,category:cat,owner:_currentProfile,
           recurring:true,recurringGroup,recurringNum:i+1,recurringTotal:months
         });
@@ -1758,12 +1760,12 @@ async function saveTransaction(){
     const partner=otherProfile(_currentProfile);
     const groupId='sh_'+Date.now().toString(36);
     db.transactions.unshift({
-      id:Date.now().toString(),type:currentType,description:desc,
+      id:generateTransactionId(),type:currentType,description:desc,
       amount:parseFloat((amount*minePct/100).toFixed(2)),date,category:cat,
       owner:_currentProfile,shared:true,groupId,sharedTotal:amount,splitPct:minePct,paidBy:_currentProfile
     });
     db.transactions.unshift({
-      id:Date.now().toString()+'_p',type:currentType,description:desc,
+      id:generateTransactionId(),type:currentType,description:desc,
       amount:parseFloat((amount*partnerPct/100).toFixed(2)),date,category:cat,
       owner:partner,shared:true,groupId,sharedTotal:amount,splitPct:partnerPct,paidBy:_currentProfile
     });
@@ -1778,7 +1780,7 @@ async function saveTransaction(){
       d.setMonth(d.getMonth()+i);
       const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
       db.transactions.unshift({
-        id:Date.now().toString()+Math.random().toString(36).slice(2),
+        id:generateTransactionId(),
         type:currentType,
         description:`${desc} (${i+1}/${n})`,
         amount:parseFloat(parcelaValor.toFixed(2)),
@@ -1795,12 +1797,18 @@ async function saveTransaction(){
       const idx=db.transactions.findIndex(t=>t.id===editingId);
       if(idx>=0)db.transactions[idx]={...db.transactions[idx],type:currentType,description:desc,amount,date,category:cat};
     } else {
-      db.transactions.unshift({id:Date.now().toString(),type:currentType,description:desc,amount,date,category:cat,owner:_currentProfile});
+      db.transactions.unshift({id:generateTransactionId(),type:currentType,description:desc,amount,date,category:cat,owner:_currentProfile});
     }
   }
   db.transactions.sort((a,b)=>new Date(b.date)-new Date(a.date));
-  await saveDBAndSync(db);
-  closeModal();populateAllSelects();refreshAll();
+  try{
+    await saveDBAndSync(db);
+    closeModal();populateAllSelects();refreshAll();
+  }catch(err){
+    // Não fecha o formulário: o usuário precisa saber que o Firebase não confirmou.
+    populateAllSelects();refreshAll();
+    alert('Não foi possível salvar no Firebase.\n\nO lançamento ficou pendente neste aparelho e será tentado novamente.\n\nDetalhes: '+err.message);
+  }
 }
 async function delTx(id){
   const db=loadDB();
@@ -2526,6 +2534,11 @@ function cloudPayload(){
     }
   };
 }
+function generateTransactionId(){
+  try{if(window.crypto?.randomUUID)return window.crypto.randomUUID()}catch{}
+  return 'tx_'+Date.now().toString(36)+'_'+Math.random().toString(36).slice(2,12);
+}
+
 async function syncToCloud(showFeedback=false){
   // Serializa gravações para evitar duas operações simultâneas sobrescrevendo a fila.
   const run=async()=>{
