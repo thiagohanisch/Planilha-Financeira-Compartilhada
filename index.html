@@ -1250,7 +1250,7 @@ async function handleAuthenticatedUser(user){
     const btn=document.getElementById('login-btn');if(btn){btn.disabled=true;btn.textContent='Carregando...'}
     await syncFromCloud(false);
     _cloudLoaded=true;
-    attachTransactionsListener();
+    // syncFromCloud já instala o listener; não registrar o mesmo listener novamente.
     updateProfileUI();populateAllSelects();refreshAll();renderCloudSection();showApp();
   }catch(err){showLogin();setLoginError('Falha ao carregar os dados: '+err.message)}
   finally{_appOpening=false;const sub=document.getElementById('lock-sub');if(sub)sub.textContent='Entre com sua conta autorizada'}
@@ -2645,11 +2645,13 @@ async function syncFromCloud(showFeedback=false){
     let data=snap.val();
 
     if(!data){
-      logCloud('⚠ Banco ainda está vazio. Os dados locais serão preservados e enviados por registro.');
+      logCloud('⚠ Banco ainda está vazio. Os dados locais serão enviados ao Firebase.');
       _cloudTxMap={};
       (_db.transactions||[]).forEach(t=>_localDirtyIds.add(String(t.id)));
+      // O banco remoto está vazio: envia a base local antes de abrir o listener.
+      await syncToCloud(showFeedback);
       attachTransactionsListener();
-      return false;
+      return true;
     }
 
     data=await migrateLegacyCloudIfNeeded(data);
@@ -3551,14 +3553,25 @@ function toggleMonthlyDetail(){
 }
 
 // ===================== INIT =====================
-(function bootFinTrack(){
-  // Inicializa o Firebase imediatamente para que o botão de login já funcione.
-  try{initFirebase()}catch(err){
+(async function bootFinTrack(){
+  // IMPORTANTE: o cache local precisa terminar de carregar ANTES do Firebase.
+  // Caso contrário, onAuthStateChanged pode baixar os dados do Firebase e,
+  // logo depois, loadAll() terminar e sobrescrever _db com o cache antigo.
+  // Esse race condition fazia lançamentos desaparecerem após F5.
+  try{
+    await loadAll();
+    populateAllSelects();
+  }catch(err){
+    console.error('Falha ao carregar cache local:',err);
+  }
+
+  try{
+    initFirebase();
+  }catch(err){
     showLogin();
     setLoginError('Falha ao iniciar o Firebase: '+(err?.message||err));
   }
-  // Carrega o cache local em paralelo, sem bloquear a autenticação.
-  loadAll().then(()=>populateAllSelects()).catch(err=>console.error('Falha ao carregar cache local:',err));
+
   const form=document.getElementById('firebase-login-form');
   if(form){
     form.addEventListener('submit',loginWithFirebase);
