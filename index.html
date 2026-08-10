@@ -2484,6 +2484,13 @@ function renderCloudSection(){
   const profileEl=document.getElementById('cloud-user-profile');if(profileEl)profileEl.textContent=_currentProfile?profileName(_currentProfile):'—';
   const urlEl=document.getElementById('cloud-url-display');if(urlEl)urlEl.textContent=FIREBASE_CONFIG.databaseURL;
 }
+
+function firebaseSafeKey(value){
+  // Realtime Database não aceita . # $ [ ] / nas chaves.
+  // Mantemos o ID original dentro do objeto e usamos uma chave segura no Firebase.
+  return String(value ?? '').replace(/[.#$\[\]\/]/g,'_');
+}
+
 function txArrayToMap(txs){
   const map={};
   (txs||[]).forEach(t=>{if(t?.id!=null)map[String(t.id)]=t});
@@ -2518,15 +2525,17 @@ async function syncToCloud(showFeedback=false){
       const tx=localMap[id];
       if(!tx)continue;
       writes.push(
-        realtimeDb.ref('fintrack/transactions').child(String(id)).set({
+        realtimeDb.ref('fintrack/transactions').child(firebaseSafeKey(id)).set({
           ...tx,
+          id: tx.id,
+          firebaseKey: firebaseSafeKey(id),
           updatedAt:firebase.database.ServerValue.TIMESTAMP,
           updatedBy:uid
         })
       );
     }
     for(const id of deleted){
-      writes.push(realtimeDb.ref('fintrack/transactions').child(String(id)).remove());
+      writes.push(realtimeDb.ref('fintrack/transactions').child(firebaseSafeKey(id)).remove());
     }
 
     // Metadados e configurações são enviados separadamente das transações.
@@ -2562,7 +2571,7 @@ async function migrateLegacyCloudIfNeeded(data){
   const legacy=JSON.parse(data.db);
   const txMap=txArrayToMap(legacy.transactions||[]);
   const updates={};
-  Object.entries(txMap).forEach(([id,t])=>updates[`fintrack/transactions/${id}`]=t);
+  Object.entries(txMap).forEach(([id,t])=>updates[`fintrack/transactions/${firebaseSafeKey(id)}`]={...t,id:t.id,firebaseKey:firebaseSafeKey(id)});
   if(data.cats)updates['fintrack/categories']=data.cats;
   if(data.imports)updates['fintrack/imports']=data.imports;
   updates['fintrack/metadata/migratedAt']=firebase.database.ServerValue.TIMESTAMP;
