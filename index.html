@@ -1170,7 +1170,7 @@ const FIREBASE_CONFIG={
 const PROFILE_EMAIL_PREFIXES={thiago:'thiagohanisch',luiza:'lcarn'};
 
 let firebaseApp=null,auth=null,realtimeDb=null;
-let _authReady=false,_cloudLoaded=false,_appOpening=false,_syncTimer=null,_syncInProgress=false,_syncPending=false,_suppressAutoSync=false;
+let _authReady=false,_cloudLoaded=false,_appOpening=false,_syncTimer=null,_syncInProgress=false,_syncPending=false,_suppressAutoSync=false,_cloudWriteQueue=Promise.resolve();
 let _cloudTxMap={},_localDirtyIds=new Set(),_localDeletedIds=new Set(),_transactionsListener=null;
 
 function firebaseConfigured(){
@@ -1250,6 +1250,7 @@ async function handleAuthenticatedUser(user){
     const btn=document.getElementById('login-btn');if(btn){btn.disabled=true;btn.textContent='Carregando...'}
     await syncFromCloud(false);
     _cloudLoaded=true;
+    attachTransactionsListener();
     updateProfileUI();populateAllSelects();refreshAll();renderCloudSection();showApp();
   }catch(err){showLogin();setLoginError('Falha ao carregar os dados: '+err.message)}
   finally{_appOpening=false;const sub=document.getElementById('lock-sub');if(sub)sub.textContent='Entre com sua conta autorizada'}
@@ -1410,7 +1411,13 @@ async function migrateDoacaoToExpense(){
 function loadCats(){return _cats}
 function loadDB(){return _db}
 function loadImports(){return _imports}
-async function saveCats(c){_cats=c;await store.set(CATS_KEY,JSON.stringify(c));scheduleAutoSync()}
+async function saveCats(c){
+  _cats=c;
+  await store.set(CATS_KEY,JSON.stringify(c));
+  if(!_suppressAutoSync && auth?.currentUser && realtimeDb){
+    try{await syncToCloud(false)}catch(err){logCloud('⚠ Categoria salva localmente; aguardando Firebase: '+err.message);scheduleAutoSync()}
+  }else scheduleAutoSync();
+}
 async function saveDB(db){
   const previous=new Map((_db?.transactions||[]).map(t=>[String(t.id),JSON.stringify(t)]));
   const next=new Map((db?.transactions||[]).map(t=>[String(t.id),JSON.stringify(t)]));
@@ -1433,19 +1440,29 @@ async function saveDB(db){
   _db=db;
   await store.set(DB_KEY,JSON.stringify(db));
 }
-async function saveImports(a){_imports=a;await store.set(IMP_KEY,JSON.stringify(a));scheduleAutoSync()}
+async function saveImports(a){
+  _imports=a;
+  await store.set(IMP_KEY,JSON.stringify(a));
+  if(!_suppressAutoSync && auth?.currentUser && realtimeDb){
+    try{await syncToCloud(false)}catch(err){logCloud('⚠ Importações salvas localmente; aguardando Firebase: '+err.message);scheduleAutoSync()}
+  }else scheduleAutoSync();
+}
 
 async function saveDBAndSync(db){
   await saveDB(db);
-  if(!_suppressAutoSync && _cloudLoaded && auth?.currentUser && realtimeDb){
+  if(_suppressAutoSync)return;
+  if(auth?.currentUser && realtimeDb){
     try{
+      // O cadastro/edição/exclusão só é considerado sincronizado após o Firebase confirmar.
       await syncToCloud(false);
     }catch(err){
-      // Mantém _localDirtyIds para nova tentativa automática.
-      logCloud('⚠ Salvo neste aparelho, mas aguardando envio ao Firebase: '+err.message);
+      // A fila permanece intacta para uma nova tentativa.
+      logCloud('⚠ Alteração salva neste aparelho, mas ainda não confirmada no Firebase: '+err.message);
       scheduleAutoSync();
-      throw err;
+      // Não bloqueia a interface: a transação continua pendente e será reenviada.
     }
+  }else{
+    scheduleAutoSync();
   }
 }
 function scheduleAutoSync(){
@@ -2510,59 +2527,60 @@ function cloudPayload(){
   };
 }
 async function syncToCloud(showFeedback=false){
-  if(!auth?.currentUser||!realtimeDb)throw new Error('Usuário não autenticado.');
-  const uid=auth.currentUser.uid;
-  const dirty=[..._localDirtyIds];
-  const deleted=[..._localDeletedIds];
-  const localMap=txArrayToMap(_db.transactions);
-  try{
-    if(showFeedback)logCloud('⏳ Enviando alterações...');
+  // Serializa gravações para evitar duas operações simultâneas sobrescrevendo a fila.
+  const run=async()=>{
+    if(!auth?.currentUser||!realtimeDb)throw new Error('Usuário não autenticado.');
+    const uid=auth.currentUser.uid;
+    const dirty=[..._localDirtyIds];
+    const deleted=[..._localDeletedIds];
+    const localMap=txArrayToMap(_db.transactions);
+    if(!dirty.length && !deleted.length && _cats && _imports==null){return true}
+    try{
+      if(showFeedback)logCloud('⏳ Enviando alterações...');
 
-    // Grava cada transação individualmente. Isso evita que uma falha de permissão
-    // em um único caminho impeça todo o lote e torna o erro identificável.
-    const writes=[];
-    for(const id of dirty){
-      const tx=localMap[id];
-      if(!tx)continue;
-      writes.push(
-        realtimeDb.ref('fintrack/transactions').child(firebaseSafeKey(id)).set({
+      // Cada transação é uma operação independente. O ID original nunca é usado
+      // como chave do Firebase; somente firebaseSafeKey(id) é usado no caminho.
+      for(const id of dirty){
+        const tx=localMap[id];
+        if(!tx)continue;
+        const key=firebaseSafeKey(id);
+        await realtimeDb.ref('fintrack/transactions').child(key).set({
           ...tx,
-          id: tx.id,
-          firebaseKey: firebaseSafeKey(id),
+          id:String(tx.id),
+          firebaseKey:key,
           updatedAt:firebase.database.ServerValue.TIMESTAMP,
           updatedBy:uid
-        })
-      );
+        });
+        _cloudTxMap[key]={...tx,id:String(tx.id),firebaseKey:key};
+        _localDirtyIds.delete(id);
+      }
+
+      for(const id of deleted){
+        await realtimeDb.ref('fintrack/transactions').child(firebaseSafeKey(id)).remove();
+        delete _cloudTxMap[firebaseSafeKey(id)];
+        _localDeletedIds.delete(id);
+      }
+
+      // Mantém configurações separadas da coleção de transações.
+      await realtimeDb.ref('fintrack/categories').set(JSON.stringify(_cats));
+      await realtimeDb.ref('fintrack/imports').set(JSON.stringify(_imports));
+      await realtimeDb.ref('fintrack/metadata').update({
+        updated:firebase.database.ServerValue.TIMESTAMP,
+        updatedBy:uid
+      });
+
+      _lastCloudSyncAt=Date.now();
+      logCloud('✓ Firebase confirmado às '+new Date().toLocaleTimeString('pt-BR'));
+      renderCloudSection();
+      return true;
+    }catch(err){
+      logCloud('✗ Firebase recusou a gravação: '+err.message);
+      throw err;
     }
-    for(const id of deleted){
-      writes.push(realtimeDb.ref('fintrack/transactions').child(firebaseSafeKey(id)).remove());
-    }
+  };
 
-    // Metadados e configurações são enviados separadamente das transações.
-    writes.push(realtimeDb.ref('fintrack/categories').set(JSON.stringify(_cats)));
-    writes.push(realtimeDb.ref('fintrack/imports').set(JSON.stringify(_imports)));
-    writes.push(realtimeDb.ref('fintrack/metadata').update({
-      updated:firebase.database.ServerValue.TIMESTAMP,
-      updatedBy:uid
-    }));
-
-    await Promise.all(writes);
-
-    dirty.forEach(id=>{
-      if(localMap[id])_cloudTxMap[id]=localMap[id];
-    });
-    deleted.forEach(id=>delete _cloudTxMap[id]);
-    dirty.forEach(id=>_localDirtyIds.delete(id));
-    deleted.forEach(id=>_localDeletedIds.delete(id));
-
-    logCloud('✓ Alterações sincronizadas em '+new Date().toLocaleTimeString('pt-BR'));
-    return true;
-  }catch(err){
-    logCloud('✗ Erro ao enviar: '+err.message);
-    // Não limpamos a fila: a operação será tentada novamente.
-    if(showFeedback)alert('Não foi possível enviar os dados ao Firebase.\n\n'+err.message);
-    throw err;
-  }
+  _cloudWriteQueue=_cloudWriteQueue.then(run,run);
+  return _cloudWriteQueue;
 }
 async function migrateLegacyCloudIfNeeded(data){
   if(data?.transactions)return data;
@@ -2592,14 +2610,8 @@ function attachTransactionsListener(){
 
     const localMap=txArrayToMap(_db.transactions);
     const merged={...remote};
-    const hasPendingLocal=_localDirtyIds.size>0||_localDeletedIds.size>0;
-    if(hasPendingLocal){
-      _localDirtyIds.forEach(id=>{if(localMap[id])merged[id]=localMap[id]});
-      _localDeletedIds.forEach(id=>delete merged[id]);
-    }
-
-    _localDirtyIds.forEach(id=>{if(localMap[id])merged[id]=localMap[id]});
-    _localDeletedIds.forEach(id=>delete merged[id]);
+    _localDirtyIds.forEach(id=>{if(localMap[id])merged[firebaseSafeKey(id)]=localMap[id]});
+    _localDeletedIds.forEach(id=>delete merged[firebaseSafeKey(id)]);
 
     _suppressAutoSync=true;
     await saveDB({transactions:txMapToArray(merged)});
@@ -2630,11 +2642,19 @@ async function syncFromCloud(showFeedback=false){
     data=await migrateLegacyCloudIfNeeded(data);
     const remoteMap=data.transactions||{};
     _cloudTxMap=remoteMap;
-    _localDirtyIds.clear();
-    _localDeletedIds.clear();
+    const pendingDirty=new Set(_localDirtyIds);
+    const pendingDeleted=new Set(_localDeletedIds);
 
     _suppressAutoSync=true;
-    await saveDB({transactions:txMapToArray(remoteMap)});
+    const mergedRemote={...remoteMap};
+    const currentMap=txArrayToMap(_db.transactions);
+    pendingDirty.forEach(id=>{if(currentMap[id])mergedRemote[firebaseSafeKey(id)]=currentMap[id]});
+    pendingDeleted.forEach(id=>delete mergedRemote[firebaseSafeKey(id)]);
+    await saveDB({transactions:txMapToArray(mergedRemote)});
+    _localDirtyIds.clear();
+    _localDeletedIds.clear();
+    pendingDirty.forEach(id=>_localDirtyIds.add(id));
+    pendingDeleted.forEach(id=>_localDeletedIds.add(id));
     if(data.categories)await saveCats(JSON.parse(data.categories));
     else if(data.cats)await saveCats(JSON.parse(data.cats));
     if(data.imports)await saveImports(JSON.parse(data.imports));
@@ -2656,6 +2676,16 @@ async function syncFromCloud(showFeedback=false){
 }
 
 function logCloud(msg){const el=document.getElementById('cloud-log');if(el)el.innerHTML=msg+'<br>'+el.innerHTML}
+async function forceFirebaseSync(){
+  try{
+    if(!auth?.currentUser){throw new Error('Usuário não autenticado.')}
+    await syncToCloud(true);
+    await syncFromCloud(true);
+    alert('✓ Firebase sincronizado e confirmado.');
+  }catch(err){
+    alert('✗ Falha na sincronização.\n\n'+err.message);
+  }
+}
 function firebaseSyncDiagnostics(){
   const u=auth?.currentUser;
   return {uid:u?.uid||null,email:u?.email||null,cloudLoaded:_cloudLoaded,dirty:_localDirtyIds.size,deleted:_localDeletedIds.size,transactions:_db.transactions.length};
