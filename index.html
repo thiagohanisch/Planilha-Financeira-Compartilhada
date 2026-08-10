@@ -1449,7 +1449,17 @@ async function saveDB(db){
 }
 async function saveImports(a){_imports=a;await store.set(IMP_KEY,JSON.stringify(a));scheduleAutoSync()}
 
-async function saveDBAndSync(db){await saveDB(db);scheduleAutoSync()}
+async function saveDBAndSync(db){
+  // Para operações feitas pelo usuário, o salvamento no Firebase é imediato.
+  // O agendamento de 500 ms era vulnerável a navegação/fechamento da página
+  // antes que a alteração chegasse ao Realtime Database.
+  await saveDB(db);
+  if(_cloudLoaded && auth?.currentUser && realtimeDb){
+    await syncToCloud(false);
+  }else{
+    scheduleAutoSync();
+  }
+}
 function scheduleAutoSync(){
   if(_suppressAutoSync||!_cloudLoaded||!auth?.currentUser||!realtimeDb)return;
   clearTimeout(_syncTimer);_syncTimer=setTimeout(()=>autoSyncToCloud(),500);
@@ -1457,7 +1467,7 @@ function scheduleAutoSync(){
 async function autoSyncToCloud(){
   if(_syncInProgress){_syncPending=true;return}
   _syncInProgress=true;
-  try{await syncToCloud(false)}
+  try{await syncToCloud(false)}catch(err){logCloud('✗ Sincronização automática falhou: '+(err?.message||err))}
   finally{_syncInProgress=false;if(_syncPending){_syncPending=false;scheduleAutoSync()}}
 }
 
@@ -1784,7 +1794,15 @@ async function saveTransaction(){
     }
   }
   db.transactions.sort((a,b)=>new Date(b.date)-new Date(a.date));
-  await saveDBAndSync(db);
+  try{
+    await saveDBAndSync(db);
+  }catch(err){
+    // A transação permanece no armazenamento local e nas filas de sincronização.
+    // Não fechamos o formulário para deixar claro que o envio ao Firebase falhou.
+    alert('A transação foi salva neste aparelho, mas não foi possível sincronizá-la com o Firebase.\n\nErro: '+(err?.message||err));
+    renderCloudSection();
+    return;
+  }
   closeModal();populateAllSelects();refreshAll();
 }
 async function delTx(id){
