@@ -848,6 +848,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn" onclick="syncFromCloud(true)">⬇ Baixar novamente</button>
         <button class="btn btn-primary" onclick="syncToCloud(true)">⬆ Enviar tudo</button>
+        <button class="btn" onclick="diagnoseFirebaseWrite()">🧪 Testar Firebase</button>
         <button class="btn btn-danger" onclick="logoutProfile()">Sair da conta</button>
       </div>
     </div>
@@ -1365,11 +1366,16 @@ function ownerSplitHtml(totals,showValues=true){
 }
 
 let _db={transactions:[]},_cats=JSON.parse(JSON.stringify(DEFAULT_CATS)),_imports=[];
+// Snapshot da última versão efetivamente carregada/salva no armazenamento local.
+// É separado de _db porque várias telas recebem _db por referência e o alteram antes de chamar saveDB().
+let _dbPersistedJson=JSON.stringify(_db);
 
 async function loadAll(){
   try{
     const[dbR,catsR,impsR]=await Promise.all([store.get(DB_KEY),store.get(CATS_KEY),store.get(IMP_KEY)]);
     _db=dbR?JSON.parse(dbR):{transactions:[]};
+    // Guarda o estado original antes de qualquer migração ou edição em memória.
+    _dbPersistedJson=JSON.stringify(_db);
     _cats=catsR?JSON.parse(catsR):JSON.parse(JSON.stringify(DEFAULT_CATS));
     _imports=impsR?JSON.parse(impsR):[];
     await migrateDoacaoToExpense();
@@ -1419,7 +1425,13 @@ async function saveCats(c){
   }else scheduleAutoSync();
 }
 async function saveDB(db){
-  const previous=new Map((_db?.transactions||[]).map(t=>[String(t.id),JSON.stringify(t)]));
+  // IMPORTANTE: não compare com _db aqui. loadDB() devolve o próprio _db e
+  // várias rotinas o alteram por referência antes de chegar nesta função.
+  // Se comparássemos _db x db, os dois já seriam iguais e nenhum ID seria
+  // marcado como pendente — exatamente o motivo de os gastos ficarem só locais.
+  let persisted={transactions:[]};
+  try{persisted=JSON.parse(_dbPersistedJson||'{"transactions":[]}')}catch{}
+  const previous=new Map((persisted?.transactions||[]).map(t=>[String(t.id),JSON.stringify(t)]));
   const next=new Map((db?.transactions||[]).map(t=>[String(t.id),JSON.stringify(t)]));
 
   if(!_suppressAutoSync){
@@ -1438,8 +1450,11 @@ async function saveDB(db){
   }
 
   _db=db;
-  await store.set(DB_KEY,JSON.stringify(db));
+  const serialized=JSON.stringify(db);
+  await store.set(DB_KEY,serialized);
+  _dbPersistedJson=serialized;
 }
+
 async function saveImports(a){
   _imports=a;
   await store.set(IMP_KEY,JSON.stringify(a));
@@ -1453,12 +1468,11 @@ async function saveDBAndSync(db){
   if(_suppressAutoSync)return true;
   if(auth?.currentUser && realtimeDb){
     try{
-      // Só retorna sucesso depois que o Firebase confirmar a gravação.
-      await syncToCloud(false);
+      // Transações são sincronizadas isoladamente e verificadas no servidor.
+      await syncTransactionsToCloud(false);
       return true;
     }catch(err){
-      // Mantém os IDs pendentes para nova tentativa e propaga o erro para a interface.
-      logCloud('⚠ Alteração NÃO confirmada no Firebase: '+err.message);
+      logCloud('⚠ Alteração NÃO confirmada no Firebase: '+formatFirebaseWriteError(err));
       scheduleAutoSync();
       throw err;
     }
@@ -1467,6 +1481,46 @@ async function saveDBAndSync(db){
     throw new Error('Firebase ainda não está conectado/autenticado.');
   }
 }
+function formatFirebaseWriteError(err){
+  return '['+(err?.code||'sem código')+'] '+(err?.message||String(err));
+}
+async function syncTransactionsToCloud(showFeedback=false){
+  const run=async()=>{
+    if(!auth?.currentUser||!realtimeDb)throw new Error('Firebase não autenticado.');
+    const uid=auth.currentUser.uid;
+    const dirty=[..._localDirtyIds];
+    const deleted=[..._localDeletedIds];
+    const localMap=txArrayToMap(_db.transactions);
+    if(!dirty.length && !deleted.length)return true;
+    if(showFeedback)logCloud('⏳ Enviando transações...');
+    for(const id of dirty){
+      const tx=localMap[id]; if(!tx)continue;
+      const key=firebaseSafeKey(id);
+      const ref=realtimeDb.ref('fintrack/transactions').child(key);
+      const payload={...tx,id:String(tx.id),firebaseKey:key,updatedAt:firebase.database.ServerValue.TIMESTAMP,updatedBy:uid};
+      logCloud('⏳ Gravando: fintrack/transactions/'+key);
+      await ref.set(payload);
+      const check=await ref.once('value');
+      const saved=check.val();
+      if(!saved || String(saved.id)!==String(tx.id)){
+        throw new Error('Gravação não pôde ser confirmada após o set(). Caminho: fintrack/transactions/'+key);
+      }
+      _cloudTxMap[key]=saved;
+      _localDirtyIds.delete(id);
+      logCloud('✓ Registro confirmado no Firebase: '+key);
+    }
+    for(const id of deleted){
+      const key=firebaseSafeKey(id); const ref=realtimeDb.ref('fintrack/transactions').child(key);
+      await ref.remove();
+      const check=await ref.once('value');
+      if(check.exists())throw new Error('Exclusão não foi confirmada: '+key);
+      delete _cloudTxMap[key]; _localDeletedIds.delete(id);
+    }
+    _lastCloudSyncAt=Date.now(); renderCloudSection(); return true;
+  };
+  _cloudWriteQueue=_cloudWriteQueue.then(run,run);
+  return _cloudWriteQueue;
+}
 function scheduleAutoSync(){
   if(_suppressAutoSync||!_cloudLoaded||!auth?.currentUser||!realtimeDb)return;
   clearTimeout(_syncTimer);_syncTimer=setTimeout(()=>autoSyncToCloud(),500);
@@ -1474,7 +1528,7 @@ function scheduleAutoSync(){
 async function autoSyncToCloud(){
   if(_syncInProgress){_syncPending=true;return}
   _syncInProgress=true;
-  try{await syncToCloud(false)}
+  try{await syncTransactionsToCloud(false)}
   finally{_syncInProgress=false;if(_syncPending){_syncPending=false;scheduleAutoSync()}}
 }
 
@@ -1803,6 +1857,7 @@ async function saveTransaction(){
   db.transactions.sort((a,b)=>new Date(b.date)-new Date(a.date));
   try{
     await saveDBAndSync(db);
+    logCloud('✓ Transação salva localmente e confirmada no Firebase. Pendentes: '+_localDirtyIds.size);
     closeModal();populateAllSelects();refreshAll();
   }catch(err){
     // Não fecha o formulário: o usuário precisa saber que o Firebase não confirmou.
@@ -2540,61 +2595,30 @@ function generateTransactionId(){
 }
 
 async function syncToCloud(showFeedback=false){
-  // Serializa gravações para evitar duas operações simultâneas sobrescrevendo a fila.
-  const run=async()=>{
-    if(!auth?.currentUser||!realtimeDb)throw new Error('Usuário não autenticado.');
-    const uid=auth.currentUser.uid;
-    const dirty=[..._localDirtyIds];
-    const deleted=[..._localDeletedIds];
-    const localMap=txArrayToMap(_db.transactions);
-    if(!dirty.length && !deleted.length && _cats && _imports==null){return true}
-    try{
-      if(showFeedback)logCloud('⏳ Enviando alterações...');
+  if(!auth?.currentUser||!realtimeDb)throw new Error('Usuário não autenticado.');
+  const uid=auth.currentUser.uid;
+  try{
+    // Uma única rotina grava/exclui transações e confirma cada registro no servidor.
+    await syncTransactionsToCloud(showFeedback);
 
-      // Cada transação é uma operação independente. O ID original nunca é usado
-      // como chave do Firebase; somente firebaseSafeKey(id) é usado no caminho.
-      for(const id of dirty){
-        const tx=localMap[id];
-        if(!tx)continue;
-        const key=firebaseSafeKey(id);
-        await realtimeDb.ref('fintrack/transactions').child(key).set({
-          ...tx,
-          id:String(tx.id),
-          firebaseKey:key,
-          updatedAt:firebase.database.ServerValue.TIMESTAMP,
-          updatedBy:uid
-        });
-        _cloudTxMap[key]={...tx,id:String(tx.id),firebaseKey:key};
-        _localDirtyIds.delete(id);
-      }
+    // Configurações auxiliares continuam separadas da coleção de transações.
+    await realtimeDb.ref('fintrack/categories').set(JSON.stringify(_cats));
+    await realtimeDb.ref('fintrack/imports').set(JSON.stringify(_imports));
+    await realtimeDb.ref('fintrack/metadata').update({
+      updated:firebase.database.ServerValue.TIMESTAMP,
+      updatedBy:uid
+    });
 
-      for(const id of deleted){
-        await realtimeDb.ref('fintrack/transactions').child(firebaseSafeKey(id)).remove();
-        delete _cloudTxMap[firebaseSafeKey(id)];
-        _localDeletedIds.delete(id);
-      }
-
-      // Mantém configurações separadas da coleção de transações.
-      await realtimeDb.ref('fintrack/categories').set(JSON.stringify(_cats));
-      await realtimeDb.ref('fintrack/imports').set(JSON.stringify(_imports));
-      await realtimeDb.ref('fintrack/metadata').update({
-        updated:firebase.database.ServerValue.TIMESTAMP,
-        updatedBy:uid
-      });
-
-      _lastCloudSyncAt=Date.now();
-      logCloud('✓ Firebase confirmado às '+new Date().toLocaleTimeString('pt-BR'));
-      renderCloudSection();
-      return true;
-    }catch(err){
-      logCloud('✗ Firebase recusou a gravação: '+err.message);
-      throw err;
-    }
-  };
-
-  _cloudWriteQueue=_cloudWriteQueue.then(run,run);
-  return _cloudWriteQueue;
+    _lastCloudSyncAt=Date.now();
+    logCloud('✓ Firebase confirmado às '+new Date().toLocaleTimeString('pt-BR'));
+    renderCloudSection();
+    return true;
+  }catch(err){
+    logCloud('✗ Firebase recusou a gravação: '+formatFirebaseWriteError(err));
+    throw err;
+  }
 }
+
 async function migrateLegacyCloudIfNeeded(data){
   if(data?.transactions)return data;
   if(!data?.db)return data;
@@ -2691,6 +2715,26 @@ async function syncFromCloud(showFeedback=false){
 }
 
 function logCloud(msg){const el=document.getElementById('cloud-log');if(el)el.innerHTML=msg+'<br>'+el.innerHTML}
+async function diagnoseFirebaseWrite(){
+  const lines=[]; const u=auth?.currentUser;
+  lines.push('Usuário: '+(u?.email||'não autenticado'));
+  lines.push('UID: '+(u?.uid||'—'));
+  lines.push('Database: '+(FIREBASE_CONFIG.databaseURL||'—'));
+  lines.push('Transações locais: '+(_db?.transactions?.length||0));
+  lines.push('Pendentes: '+_localDirtyIds.size);
+  try{
+    if(!u||!realtimeDb)throw new Error('Firebase não autenticado/inicializado.');
+    const ref=realtimeDb.ref('fintrack/_diagnostic/'+u.uid);
+    await ref.set({uid:u.uid,at:firebase.database.ServerValue.TIMESTAMP});
+    const check=await ref.once('value');
+    lines.push('ESCRITA: '+(check.exists()?'OK':'FALHOU'));
+    await ref.remove();
+    lines.push('LEITURA: '+(check.exists()?'OK':'FALHOU'));
+    lines.push('EXCLUSÃO: OK');
+  }catch(err){ lines.push('ERRO FIREBASE: '+formatFirebaseWriteError(err)); }
+  const text=lines.join('\\n'); logCloud(text.replaceAll('\\n','<br>')); alert(text); return text;
+}
+
 async function forceFirebaseSync(){
   try{
     if(!auth?.currentUser){throw new Error('Usuário não autenticado.')}
