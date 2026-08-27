@@ -1172,7 +1172,7 @@ const PROFILE_EMAIL_PREFIXES={thiago:'thiagohanisch',luiza:'lcarn'};
 
 let firebaseApp=null,auth=null,realtimeDb=null;
 let _authReady=false,_cloudLoaded=false,_appOpening=false,_syncTimer=null,_syncInProgress=false,_syncPending=false,_suppressAutoSync=false,_cloudWriteQueue=Promise.resolve();
-let _cloudTxMap={},_localDirtyIds=new Set(),_localDeletedIds=new Set(),_transactionsListener=null,_remoteApplyTimer=null,_pendingRemoteSnapshot=null;
+let _cloudTxMap={},_localDirtyIds=new Set(),_localDeletedIds=new Set(),_transactionsListener=null,_remoteApplyTimer=null,_pendingRemoteSnapshot=null,_lastRemoteSignature='';
 
 function firebaseConfigured(){
   return !Object.values(FIREBASE_CONFIG).some(v=>String(v).includes('COLE_AQUI'));
@@ -2679,17 +2679,32 @@ async function migrateLegacyCloudIfNeeded(data){
     imports:data.imports
   };
 }
+function remoteSemanticSignature(map){
+  // Assinatura estável: ignora metadados voláteis do Firebase e só considera dados de negócio.
+  const clean=Object.entries(map||{}).sort(([a],[b])=>a.localeCompare(b)).map(([key,t])=>{
+    const c={...(t||{})};
+    delete c.updatedAt;delete c.updatedBy;delete c.firebaseKey;
+    return [key,c];
+  });
+  return JSON.stringify(clean);
+}
+
 function attachTransactionsListener(){
   if(_transactionsListener)realtimeDb.ref('fintrack/transactions').off('value',_transactionsListener);
   _transactionsListener=snap=>{
-    // O Firebase dispara um evento por alteração. Agrupamos eventos próximos para não
-    // re-renderizar a tela dezenas de vezes durante um envio em lote.
-    _pendingRemoteSnapshot=snap.val()||{};
+    // O Firebase pode emitir eventos locais/ack repetidos. Só processamos quando o conteúdo
+    // real das transações mudou, evitando o ciclo de "salvamento" a cada segundo.
+    const incoming=snap.val()||{};
+    const incomingSig=remoteSemanticSignature(incoming);
+    if(incomingSig===_lastRemoteSignature)return;
+
+    _pendingRemoteSnapshot=incoming;
     clearTimeout(_remoteApplyTimer);
     _remoteApplyTimer=setTimeout(async()=>{
       const remote=_pendingRemoteSnapshot||{};
       _pendingRemoteSnapshot=null;
-      _cloudTxMap=remote;
+      const remoteSig=remoteSemanticSignature(remote);
+      if(remoteSig===_lastRemoteSignature)return;
 
       const localMap=txArrayToMap(_db.transactions);
       const merged={...remote};
@@ -2701,7 +2716,6 @@ function attachTransactionsListener(){
         const localVersion=Number(local.clientUpdatedAt||0);
         const remoteVersion=Number(remoteTx?.clientUpdatedAt||0);
         if(remoteTx && remoteVersion>localVersion){
-          // A nuvem é comprovadamente mais nova: não deixe uma cópia local antiga sobrescrever.
           _localDirtyIds.delete(id);
           merged[key]=remoteTx;
           logCloud('⚠ Conflito evitado: recebida versão mais nova de '+key+'.');
@@ -2711,13 +2725,21 @@ function attachTransactionsListener(){
       });
       _localDeletedIds.forEach(id=>delete merged[firebaseSafeKey(id)]);
 
+      const mergedSig=remoteSemanticSignature(merged);
+      const localSig=remoteSemanticSignature(txArrayToMap(_db.transactions));
+      _cloudTxMap=remote;
+      _lastRemoteSignature=remoteSig;
+
+      // Se o conteúdo efetivo já é igual ao local, não salva novamente nem re-renderiza.
+      if(mergedSig===localSig)return;
+
       _suppressAutoSync=true;
       try{await saveDB({transactions:txMapToArray(merged)})}
       finally{_suppressAutoSync=false}
       populateAllSelects();
       refreshAll();
-      logCloud('↻ Atualização em tempo real recebida às '+new Date().toLocaleTimeString('pt-BR'));
-    },180);
+      logCloud('↻ Dados alterados na nuvem às '+new Date().toLocaleTimeString('pt-BR'));
+    },350);
   };
   realtimeDb.ref('fintrack/transactions').on('value',_transactionsListener,err=>{
     logCloud('✗ Falha no acompanhamento em tempo real: '+err.message);
@@ -2734,6 +2756,7 @@ async function syncFromCloud(showFeedback=false){
     if(!data){
       logCloud('⚠ Banco ainda está vazio. Os dados locais serão enviados ao Firebase.');
       _cloudTxMap={};
+      _lastRemoteSignature=remoteSemanticSignature({});
       (_db.transactions||[]).forEach(t=>_localDirtyIds.add(String(t.id)));
       // O banco remoto está vazio: envia a base local antes de abrir o listener.
       await syncToCloud(showFeedback);
@@ -2744,6 +2767,7 @@ async function syncFromCloud(showFeedback=false){
     data=await migrateLegacyCloudIfNeeded(data);
     const remoteMap=data.transactions||{};
     _cloudTxMap=remoteMap;
+    _lastRemoteSignature=remoteSemanticSignature(remoteMap);
     const pendingDirty=new Set(_localDirtyIds);
     const pendingDeleted=new Set(_localDeletedIds);
 
