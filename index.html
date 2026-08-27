@@ -599,6 +599,18 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
   </div>
 </section>
 
+<!-- INDICADOR DE CARREGAMENTO DA IMPORTAÇÃO -->
+<div id="import-loading-overlay" style="display:none;position:fixed;inset:0;z-index:99999;background:rgba(7,11,20,.78);backdrop-filter:blur(4px);align-items:center;justify-content:center;padding:20px">
+  <div style="width:min(440px,92vw);background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:24px;box-shadow:0 20px 60px rgba(0,0,0,.4)">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+      <div style="font-size:28px">📥</div>
+      <div><div id="import-loading-title" style="font-size:16px;font-weight:600">Carregando arquivo...</div><div id="import-loading-text" style="font-size:12px;color:var(--text2);margin-top:3px">Aguarde enquanto os dados são processados.</div></div>
+    </div>
+    <div style="height:9px;background:var(--bg4);border-radius:999px;overflow:hidden"><div id="import-loading-bar" style="height:100%;width:8%;background:var(--green);border-radius:999px;transition:width .25s ease"></div></div>
+    <div id="import-loading-percent" style="text-align:right;font-family:'DM Mono',monospace;font-size:11px;color:var(--text3);margin-top:7px">8%</div>
+  </div>
+</div>
+
 <!-- IMPORTAR -->
 <section id="sec-importar" class="section">
   <div class="page-header"><div><div class="page-title">Importar Excel</div><div class="page-sub">Compatível com a sua planilha</div></div></div>
@@ -2384,83 +2396,148 @@ let pendingImport=[];
 function dragOver(e){e.preventDefault();document.getElementById('drop-zone').classList.add('dragover')}
 function dragLeave(){document.getElementById('drop-zone').classList.remove('dragover')}
 function dropFile(e){e.preventDefault();dragLeave();const f=e.dataTransfer.files[0];if(f)handleFile(f)}
+function parseImportNumber(v){
+  if(typeof v==='number'&&Number.isFinite(v))return v;
+  let s=String(v??'').trim();
+  if(!s)return NaN;
+  s=s.replace(/R\$|\s/g,'');
+  // pt-BR: 1.234,56; internacional: 1234.56
+  if(s.includes(','))s=s.replace(/\./g,'').replace(',','.');
+  return Number(s);
+}
+function parseImportDate(v){
+  if(v instanceof Date&&!isNaN(v))return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}`;
+  if(typeof v==='number'&&Number.isFinite(v)){
+    const d=XLSX.SSF.parse_date_code(v);
+    if(d)return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+  }
+  const s=String(v??'').trim(); if(!s)return '';
+  let m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if(m){let y=Number(m[3]);if(y<100)y+=2000;return `${y}-${String(Number(m[2])).padStart(2,'0')}-${String(Number(m[1])).padStart(2,'0')}`}
+  m=s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
+  if(m)return `${m[1]}-${String(Number(m[2])).padStart(2,'0')}-${String(Number(m[3])).padStart(2,'0')}`;
+  const d=new Date(s);return isNaN(d)?'':`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function showImportLoading(title='Carregando arquivo...',text='Aguarde enquanto os dados são processados.',pct=8){
+  const ov=document.getElementById('import-loading-overlay');if(!ov)return;
+  ov.style.display='flex';updateImportLoading(title,text,pct);
+}
+function updateImportLoading(title,text,pct){
+  const t=document.getElementById('import-loading-title'),x=document.getElementById('import-loading-text'),b=document.getElementById('import-loading-bar'),p=document.getElementById('import-loading-percent');
+  if(t&&title)t.textContent=title;if(x&&text)x.textContent=text;
+  const n=Math.max(0,Math.min(100,Number(pct)||0));if(b)b.style.width=n+'%';if(p)p.textContent=Math.round(n)+'%';
+}
+function hideImportLoading(delay=250){setTimeout(()=>{const ov=document.getElementById('import-loading-overlay');if(ov)ov.style.display='none'},delay)}
 function handleFile(file){
   if(!file)return;
+  showImportLoading('Carregando Excel...',file.name,5);
   const reader=new FileReader();
   reader.onload=(e)=>{
     try{
-      const wb=XLSX.read(e.target.result,{type:'binary',cellDates:true});
-      const sn=wb.SheetNames.find(s=>/gastos?/i.test(s))||wb.SheetNames[0];
+      updateImportLoading('Lendo planilha...','Abrindo e analisando as abas do Excel.',25);
+      const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
+      const sn=wb.SheetNames.find(s=>/gastos?|transa[cç][oõ]es|lan[cç]amentos/i.test(s))||wb.SheetNames[0];
       const ws=wb.Sheets[sn];
       const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null});
-      let hi=0;
-      for(let i=0;i<Math.min(10,rows.length);i++){const r=rows[i];if(r.some(c=>c&&/^dia$|^data$/i.test(String(c).trim()))&&r.some(c=>c&&/^valor$/i.test(String(c).trim()))){hi=i;break}}
-      const hdr=rows[hi].map(c=>String(c||'').toLowerCase().trim());
-      let cDia=-1,cTipo=-1,cDept=-1,cValor=-1,cDesc=-1;
-      hdr.forEach((h,i)=>{if(/^dia$|^data$/.test(h))cDia=i;else if(/^valor$/.test(h))cValor=i;else if(/departamento|categoria/.test(h))cDept=i;else if(/descri/.test(h))cDesc=i;else if((h===''||h==='unnamed')&&cTipo===-1)cTipo=i});
-      if(cDia<0)cDia=0;if(cTipo<0)cTipo=1;if(cDept<0)cDept=2;if(cValor<0)cValor=3;if(cDesc<0)cDesc=4;
+      if(!rows.length)throw new Error('A planilha está vazia.');
+      const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
+      let hi=-1;
+      for(let i=0;i<Math.min(30,rows.length);i++){
+        const hs=(rows[i]||[]).map(norm);
+        const hasDate=hs.some(h=>/^(dia|data|date)$/.test(h));
+        const hasValue=hs.some(h=>/^(valor|value|amount|total)$/.test(h));
+        if(hasDate&&hasValue){hi=i;break}
+      }
+      if(hi<0)throw new Error('Não encontrei o cabeçalho. A planilha precisa ter ao menos as colunas Data (ou Dia) e Valor.');
+      const hdr=(rows[hi]||[]).map(norm);
+      const findCol=(rx)=>hdr.findIndex(h=>rx.test(h));
+      const cDia=findCol(/^(dia|data|date)$/),cValor=findCol(/^(valor|value|amount|total)$/);
+      let cTipo=findCol(/^(tipo|type|natureza|movimento)$/);
+      let cDept=findCol(/^(departamento|categoria|category|dept|grupo)$/);
+      let cDesc=findCol(/^(descricao|descrição|description|historico|histórico|detalhe)$/);
+      if(cDept<0)cDept=2;if(cDesc<0)cDesc=4;
+      updateImportLoading('Processando lançamentos...','Validando datas, valores e categorias.',50);
       const dataRows=rows.slice(hi+1),parsed=[],skipped=[],newCatMap={};
       const cats=loadCats(),allEx=[...cats.expense,...cats.income];
-      const norm=s=>String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/\s+/g,' ').trim();
       dataRows.forEach((row,idx)=>{
-        if(!row){skipped.push(idx);return}
-        const rawDate=row[cDia],rawTipo=String(row[cTipo]||'').trim(),rawDept=String(row[cDept]||'').trim(),rawValor=row[cValor],rawDesc=String(row[cDesc]||'').trim();
-        if(!rawDate||rawValor==null||isNaN(Number(rawValor))){skipped.push(idx);return}
-        const rawNum=Number(rawValor),amount=rawNum;if(amount===0){skipped.push(idx);return}
-        let dateStr='';
-        if(rawDate instanceof Date&&!isNaN(rawDate)){dateStr=`${rawDate.getFullYear()}-${String(rawDate.getMonth()+1).padStart(2,'0')}-${String(rawDate.getDate()).padStart(2,'0')}`}
-        else if(typeof rawDate==='number'){const d=new Date(Math.round((rawDate-25569)*86400*1000));if(!isNaN(d))dateStr=d.toISOString().split('T')[0]}
-        else{const d=new Date(String(rawDate));if(!isNaN(d))dateStr=d.toISOString().split('T')[0]}
-        if(!dateStr){skipped.push(idx);return}
-        const tipoN=norm(rawTipo);let type='expense';
-        if(/recebid|entrada|receita|income/.test(tipoN))type='income';
-        const deptN=norm(rawDept);
-        // Doação é sempre despesa, independente do tipo marcado na planilha
-        if(/doa[cç][aã]o/.test(deptN)) type='expense';
+        if(!row||row.every(v=>v==null||String(v).trim()===''))return;
+        const rawDate=row[cDia],rawTipo=cTipo>=0?String(row[cTipo]||'').trim():'',rawDept=String(row[cDept]||'Sem categoria').trim()||'Sem categoria',rawValor=row[cValor],rawDesc=cDesc>=0?String(row[cDesc]||'').trim():'';
+        const dateStr=parseImportDate(rawDate),rawNum=parseImportNumber(rawValor);
+        if(!dateStr||!Number.isFinite(rawNum)||rawNum===0){skipped.push(idx+hi+2);return}
+        const tipoN=norm(rawTipo),deptN=norm(rawDept);
+        let type='expense';
+        if(/recebid|entrada|receita|income|credito|crédito/.test(tipoN)||(!rawTipo&&rawNum>0))type='income';
+        if(/gasto|despesa|saida|saída|expense|debito|débito/.test(tipoN))type='expense';
+        if(/doacao|doação/.test(deptN))type='expense';
+        const amount=Math.abs(rawNum);
         let catId=null;
-        // Apenas correspondência EXATA (normalizada) — evita confundir categorias parecidas
-        // como "Receber" vs "Recebidos" ou "Presente" vs "Presentes"
         for(const c of allEx){if(deptN===norm(c.name)){catId=c.id;break}}
-        if(!catId){catId='imp_'+slugify(rawDept);if(!newCatMap[catId])newCatMap[catId]={id:catId,name:rawDept.trim(),type,icon:'🏷️',color:randomColor()}}
-        const uid=`${dateStr}_${amount}_${catId}_${(rawDesc||rawDept).slice(0,12).replace(/\s/g,'_')}`;
-        parsed.push({id:uid,type,description:rawDesc||rawDept,amount,date:dateStr,category:catId});
+        if(!catId){catId='imp_'+(slugify(rawDept)||'sem_categoria');if(!newCatMap[catId])newCatMap[catId]={id:catId,name:rawDept,type,icon:'🏷️',color:randomColor()}}
+        const fingerprint=`${dateStr}_${amount.toFixed(2)}_${catId}_${norm(rawDesc||rawDept).slice(0,30)}`;
+        const id='imp_tx_'+slugify(fingerprint)+'_'+simpleHash(fingerprint);
+        parsed.push({id,type,description:rawDesc||rawDept,amount,date:dateStr,category:catId,clientUpdatedAt:Date.now()+idx});
       });
       pendingImport=parsed;
       document.getElementById('import-filename').textContent=file.name;
-      document.getElementById('import-fileinfo').textContent=`Aba: "${sn}" • ${dataRows.length} linhas • Dia=${cDia} Tipo=${cTipo} Dept=${cDept} Valor=${cValor}`;
+      document.getElementById('import-fileinfo').textContent=`Aba: "${sn}" • ${dataRows.length} linhas • ${parsed.length} válidas`;
       document.getElementById('imp-total').textContent=parsed.length+skipped.length;
       document.getElementById('imp-income').textContent=parsed.filter(t=>t.type==='income').length;
       document.getElementById('imp-expense').textContent=parsed.filter(t=>t.type==='expense').length;
       document.getElementById('imp-skip').textContent=skipped.length;
-      document.getElementById('import-tbody').innerHTML=parsed.slice(0,20).map(t=>{const d=new Date(t.date+'T12:00'),color=t.type==='income'?'var(--green)':'var(--red)',sign=t.amount>=0?(t.type==='income'?'+':'-'):'-';return`<tr><td>${d.toLocaleDateString('pt-BR')}</td><td style="color:${color}">${t.type==='income'?'Receita':'Despesa'}</td><td>${getCat(t.category).name||t.category}</td><td style="color:${color};font-family:DM Mono">${sign} ${fmt(t.amount)}</td><td>${t.description}</td></tr>`}).join('');
+      document.getElementById('import-tbody').innerHTML=parsed.slice(0,20).map(t=>{const d=new Date(t.date+'T12:00'),color=t.type==='income'?'var(--green)':'var(--red)',sign=t.type==='income'?'+':'-';return`<tr><td>${d.toLocaleDateString('pt-BR')}</td><td style="color:${color}">${t.type==='income'?'Receita':'Despesa'}</td><td>${getCat(t.category).name||t.category}</td><td style="color:${color};font-family:DM Mono">${sign} ${fmt(t.amount)}</td><td>${t.description}</td></tr>`}).join('');
       const newCats=Object.values(newCatMap);
       document.getElementById('import-new-cats').innerHTML=newCats.length?newCats.map(c=>`<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;background:var(--bg3);border:1px solid var(--border);font-size:12px"><span style="width:7px;height:7px;border-radius:50%;background:${c.color}"></span>${c.icon} ${c.name}</span>`).join(''):'<span style="font-size:12px;color:var(--text3)">Todas já existem</span>';
       const warn=document.getElementById('import-warn');
-      if(!parsed.length){warn.style.display='block';warn.textContent='⚠ Nenhuma linha válida. Verifique o formato.'}else warn.style.display='none';
+      if(!parsed.length){warn.style.display='block';warn.textContent='⚠ Nenhuma linha válida. Confira Data e Valor.'}
+      else if(skipped.length){warn.style.display='block';warn.textContent=`⚠ ${skipped.length} linha(s) ignorada(s): ${skipped.slice(0,12).join(', ')}${skipped.length>12?'...':''}`}
+      else warn.style.display='none';
+      updateImportLoading('Preparando prévia...',parsed.length+' lançamento(s) válido(s) encontrado(s).',90);
       document.getElementById('import-preview').style.display='block';
       if(document.getElementById('imp-owner'))document.getElementById('imp-owner').value=_currentProfile;
-    }catch(err){alert('Erro: '+err.message)}
+      updateImportLoading('Arquivo carregado!','Prévia pronta para conferência.',100);hideImportLoading(450);
+    }catch(err){pendingImport=[];hideImportLoading(0);alert('Erro ao ler Excel: '+err.message)}
   };
-  reader.readAsBinaryString(file);
+  reader.onerror=()=>{hideImportLoading(0);alert('Não foi possível ler o arquivo Excel.');};
+  reader.readAsArrayBuffer(file);
 }
+function simpleHash(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(36)}
 async function confirmImport(){
   if(!pendingImport.length){alert('Nenhum dado para importar.');return}
-  const btn=document.getElementById('btn-confirm-import');btn.textContent='⏳...';btn.disabled=true;
-  const skipDup=document.getElementById('imp-skip-dup').checked;
-  const importOwner=document.getElementById('imp-owner')?.value||_currentProfile;
-  const cats=loadCats(),allIds=new Set([...cats.expense,...cats.income].map(c=>c.id));
-  pendingImport.forEach(t=>{t.owner=importOwner;if(!allIds.has(t.category)){cats[t.type]=cats[t.type]||[];cats[t.type].push({id:t.category,name:t.category.replace('imp_','').replace(/_/g,' '),icon:'🏷️',color:randomColor(),builtin:false});allIds.add(t.category)}});
-  await saveCats(cats);
-  const db=loadDB(),existingIds=skipDup?new Set(db.transactions.map(t=>t.id)):new Set();
-  let added=0,dupes=0;
-  pendingImport.forEach(t=>{if(skipDup&&existingIds.has(t.id)){dupes++;return}db.transactions.push(t);existingIds.add(t.id);added++});
-  db.transactions.sort((a,b)=>new Date(b.date)-new Date(a.date));
-  await saveDBAndSync(db);
-  const history=loadImports();history.unshift({date:new Date().toISOString(),added,dupes,total:pendingImport.length});
-  await saveImports(history.slice(0,20));
-  btn.textContent='✓ Importar';btn.disabled=false;
-  alert(`✓ ${added} transações adicionadas${dupes?' ('+dupes+' duplicatas ignoradas)':''}.`);
-  resetImport();populateAllSelects();refreshAll();renderImportHistory();
+  const btn=document.getElementById('btn-confirm-import');btn.textContent='⏳ Importando...';btn.disabled=true;
+  showImportLoading('Importando lançamentos...','Preparando os dados para salvar.',10);
+  try{
+    const skipDup=document.getElementById('imp-skip-dup').checked;
+    const importOwner=document.getElementById('imp-owner')?.value||_currentProfile;
+    const cats=loadCats(),allIds=new Set([...cats.expense,...cats.income].map(c=>c.id));
+    pendingImport.forEach(t=>{t.owner=importOwner;if(!allIds.has(t.category)){cats[t.type]=cats[t.type]||[];cats[t.type].push({id:t.category,name:t.category.replace('imp_','').replace(/_/g,' '),icon:'🏷️',color:randomColor(),builtin:false});allIds.add(t.category)}});
+    updateImportLoading('Preparando categorias...','Organizando categorias da planilha.',30);
+    // Evita sincronizar categorias antes das transações estarem preparadas.
+    _cats=cats;await store.set(CATS_KEY,JSON.stringify(cats));
+    const db=loadDB(),existingIds=new Set(db.transactions.map(t=>String(t.id)));
+    let added=0,dupes=0;
+    for(const src of pendingImport){
+      const t={...src,owner:importOwner,clientUpdatedAt:Date.now()+added};
+      if(existingIds.has(String(t.id))){
+        if(skipDup){dupes++;continue}
+        t.id=generateTransactionId();
+      }
+      db.transactions.push(t);existingIds.add(String(t.id));added++;
+    }
+    db.transactions.sort((a,b)=>new Date(b.date)-new Date(a.date));
+    updateImportLoading('Salvando transações...',added+' lançamento(s) sendo salvos.',60);
+    await saveDBAndSync(db);
+    updateImportLoading('Sincronizando...', 'Enviando dados para a nuvem.',82);
+    await realtimeDb.ref('fintrack/categories').set(JSON.stringify(_cats));
+    const history=loadImports();history.unshift({date:new Date().toISOString(),added,dupes,total:pendingImport.length});
+    _imports=history.slice(0,20);await store.set(IMP_KEY,JSON.stringify(_imports));
+    await realtimeDb.ref('fintrack/imports').set(JSON.stringify(_imports));
+    updateImportLoading('Importação concluída!','Os dados foram carregados com sucesso.',100);
+    hideImportLoading(500);
+    alert(` ${added} transações adicionadas${dupes?' ('+dupes+' duplicatas ignoradas)':''}.`);
+    resetImport();populateAllSelects();refreshAll();renderImportHistory();
+  }catch(err){
+    hideImportLoading(0);console.error(err);alert('Falha na importação: '+(err?.message||err));
+  }finally{btn.textContent='✓ Importar';btn.disabled=false}
 }
 function resetImport(){pendingImport=[];document.getElementById('import-preview').style.display='none';document.getElementById('file-input').value=''}
 function renderImportHistory(){
