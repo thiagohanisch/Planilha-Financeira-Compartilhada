@@ -2507,33 +2507,57 @@ async function syncImportedTransactionsBulk(ids,onProgress){
   const uid=auth.currentUser.uid;
   const localMap=txArrayToMap(_db.transactions);
   const unique=[...new Set(ids.map(String))];
-  const CHUNK_SIZE=200;
+
+  // IMPORTANTE: não usamos update() no nó pai "fintrack/transactions".
+  // Dependendo das regras do Realtime Database, uma gravação multipath no pai pode
+  // ser recusada mesmo quando a escrita em cada filho é permitida. Cada lançamento
+  // é salvo diretamente no próprio caminho, mas em pequenos grupos paralelos para
+  // continuar rápido em importações grandes.
+  const CONCURRENCY=25;
   let done=0;
 
-  for(let i=0;i<unique.length;i+=CHUNK_SIZE){
-    const chunk=unique.slice(i,i+CHUNK_SIZE);
-    const updates={};
-    const now=Date.now();
-    for(const id of chunk){
-      const tx=localMap[id];if(!tx)continue;
+  for(let i=0;i<unique.length;i+=CONCURRENCY){
+    const chunk=unique.slice(i,i+CONCURRENCY);
+    await Promise.all(chunk.map(async id=>{
+      const tx=localMap[id];
+      if(!tx)return;
       const key=firebaseSafeKey(id);
-      const clientUpdatedAt=Number(tx.clientUpdatedAt||now);
+      const clientUpdatedAt=Number(tx.clientUpdatedAt||Date.now());
       tx.clientUpdatedAt=clientUpdatedAt;
-      updates[key]={...tx,id:String(tx.id),firebaseKey:key,clientUpdatedAt,updatedAt:firebase.database.ServerValue.TIMESTAMP,updatedBy:uid};
-    }
-    if(Object.keys(updates).length){
-      await realtimeDb.ref('fintrack/transactions').update(updates);
-      for(const id of chunk){
-        _localDirtyIds.delete(id);
-        const tx=localMap[id];if(tx)_cloudTxMap[firebaseSafeKey(id)]=tx;
-      }
-    }
+      const payload={
+        ...tx,
+        id:String(tx.id),
+        firebaseKey:key,
+        clientUpdatedAt,
+        updatedAt:firebase.database.ServerValue.TIMESTAMP,
+        updatedBy:uid
+      };
+      const ref=realtimeDb.ref('fintrack/transactions').child(key);
+      await ref.set(payload); // a Promise só resolve após confirmação do servidor
+      _localDirtyIds.delete(id);
+      _cloudTxMap[key]={...tx,id:String(tx.id),firebaseKey:key,clientUpdatedAt,updatedBy:uid};
+    }));
+
     done=Math.min(i+chunk.length,unique.length);
     if(typeof onProgress==='function')onProgress(done,unique.length);
-    // Devolve o controle à UI para atualizar a barra entre os blocos.
     await new Promise(resolve=>setTimeout(resolve,0));
   }
-  _lastCloudSyncAt=Date.now();renderCloudSection();return true;
+
+  // Confirma no servidor que pelo menos o primeiro e o último lançamento chegaram.
+  // Isso detecta regra/permissão ou escrita interrompida sem precisar reler 1.500 itens.
+  const checkIds=unique.length>1?[unique[0],unique[unique.length-1]]:[unique[0]];
+  for(const id of checkIds){
+    const key=firebaseSafeKey(id);
+    const snap=await realtimeDb.ref('fintrack/transactions').child(key).once('value');
+    if(!snap.exists() || String(snap.val()?.id)!==String(id)){
+      throw new Error('Firebase não confirmou o lançamento '+id+'. Verifique as regras do Realtime Database.');
+    }
+  }
+
+  _lastCloudSyncAt=Date.now();
+  renderCloudSection();
+  logCloud('✓ '+unique.length+' lançamento(s) da importação confirmados no Firebase.');
+  return true;
 }
 
 async function confirmImport(){
@@ -2586,7 +2610,10 @@ async function confirmImport(){
     alert(` ${added} transações adicionadas${dupes?' ('+dupes+' duplicatas ignoradas)':''}.`);
     resetImport();populateAllSelects();refreshAll();renderImportHistory();
   }catch(err){
-    hideImportLoading(0);console.error(err);alert('Falha na importação: '+(err?.message||err));
+    hideImportLoading(0);
+    console.error('Falha na importação/Firebase:',err);
+    logCloud('✗ Importação não confirmada no Firebase: '+formatFirebaseWriteError(err));
+    alert('Falha ao salvar no Firebase.\n\nOs dados permanecem salvos neste aparelho e podem ser reenviados.\n\nDetalhes: '+formatFirebaseWriteError(err));
   }finally{btn.textContent='✓ Importar';btn.disabled=false}
 }
 function resetImport(){pendingImport=[];document.getElementById('import-preview').style.display='none';document.getElementById('file-input').value=''}
