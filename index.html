@@ -2412,15 +2412,25 @@ function validYMD(y,m,d){
   if(dt.getFullYear()!==y||dt.getMonth()!==m-1||dt.getDate()!==d)return '';
   return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
 }
-function parseImportDate(v){
+function parseImportDate(v,inferredYear){
   if(v instanceof Date&&!isNaN(v))return validYMD(v.getFullYear(),v.getMonth()+1,v.getDate());
   if(typeof v==='number'&&Number.isFinite(v)){
+    // Algumas bases antigas têm datas digitadas como 18.02 (dia.mês), que o Excel
+    // mantém como número decimal. Não devemos interpretar 18.02 como serial de 1900.
+    if(v>0&&v<1000&&!Number.isInteger(v)){
+      const day=Math.trunc(v),month=Math.round((v-day)*100);
+      const y=Number(inferredYear)||new Date().getFullYear();
+      const ymd=validYMD(y,month,day);if(ymd)return ymd;
+    }
     const d=XLSX.SSF.parse_date_code(v);
-    if(d)return validYMD(d.y,d.m,d.d);
+    if(d&&d.y>=1900)return validYMD(d.y,d.m,d.d);
   }
   const s=String(v??'').trim(); if(!s)return '';
   let m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
   if(m){let y=Number(m[3]);if(y<100)y+=2000;return validYMD(y,Number(m[2]),Number(m[1]));}
+  // Aceita dia/mês sem ano e usa o ano predominante da própria planilha.
+  m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})$/);
+  if(m)return validYMD(Number(inferredYear)||new Date().getFullYear(),Number(m[2]),Number(m[1]));
   m=s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
   if(m)return validYMD(Number(m[1]),Number(m[2]),Number(m[3]));
   const d=new Date(s);return isNaN(d)?'':validYMD(d.getFullYear(),d.getMonth()+1,d.getDate());
@@ -2442,7 +2452,7 @@ function handleFile(file){
   reader.onload=(e)=>{
     try{
       updateImportLoading('Lendo planilha...','Abrindo e analisando as abas do Excel.',25);
-      const wb=XLSX.read(e.target.result,{type:'array',cellDates:true});
+      const wb=XLSX.read(e.target.result,{type:'array',cellDates:false});
       const sn=wb.SheetNames.find(s=>/gastos?|transa[cç][oõ]es|lan[cç]amentos/i.test(s))||wb.SheetNames[0];
       const ws=wb.Sheets[sn];
       const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:null});
@@ -2462,21 +2472,72 @@ function handleFile(file){
       let cTipo=findCol(/^(tipo|type|natureza|movimento|gasto\s*[\/\-]\s*recebido|gasto recebido|gasto\/recebido)$/);
       let cDept=findCol(/^(departamento|categoria|category|dept|grupo)$/);
       let cDesc=findCol(/^(descricao|descrição|description|historico|histórico|detalhe)$/);
+      const dataRows=rows.slice(hi+1);
+      // Formato exato das planilhas Controle.xlsx / Controle Luiza.xlsx:
+      // A = Dia | B = (sem título, mas contém Gasto/Recebido) | C = Departamento | D = Valor | E = Descrição.
+      // Quando essa estrutura for detectada, força a coluna B como TIPO. Isso evita qualquer inferência pelo sinal do valor.
+      const bTypeHits=dataRows.slice(0,120).reduce((n,r)=>{const v=norm((r||[])[1]);return n+(/^(gasto|recebido|despesa|receita|entrada|saida|saída)$/.test(v)?1:0)},0);
+      const looksLikeControleLayout=cDia===0&&cValor===3&&cDept===2&&bTypeHits>=3;
+      if(looksLikeControleLayout){cTipo=1;if(cDesc<0)cDesc=4;}
+      // Para outros arquivos com cabeçalho de tipo ausente, detecta a coluna pelo conteúdo.
+      if(cTipo<0){
+        const maxCols=Math.max(...dataRows.slice(0,80).map(r=>(r||[]).length),0);
+        let bestCol=-1,bestHits=0;
+        for(let c=0;c<maxCols;c++){
+          let hits=0,seen=0;
+          for(const r of dataRows.slice(0,80)){
+            const v=norm((r||[])[c]);if(!v)continue;seen++;
+            if(/^(gasto|recebido|despesa|receita|entrada|saida|saída)$/.test(v))hits++;
+          }
+          if(hits>=3&&hits>bestHits){bestHits=hits;bestCol=c;}
+        }
+        if(bestCol>=0)cTipo=bestCol;
+      }
       if(cDept<0)cDept=2;if(cDesc<0)cDesc=4;
+      // Descobre o ano predominante a partir das datas Excel válidas. Isso permite
+      // recuperar datas antigas digitadas como 18.02 (18 de fevereiro) sem ano.
+      const yearCount={};
+      for(const r of dataRows.slice(0,300)){
+        const v=(r||[])[cDia];
+        let y=null;
+        if(v instanceof Date&&!isNaN(v))y=v.getFullYear();
+        else if(typeof v==='number'&&Number.isFinite(v)&&v>=1000){const d=XLSX.SSF.parse_date_code(v);if(d)y=d.y;}
+        else{const m=String(v??'').trim().match(/(?:^|[\/\-.])(\d{4})$/);if(m)y=Number(m[1]);}
+        if(y>=1900&&y<=2200)yearCount[y]=(yearCount[y]||0)+1;
+      }
+      const inferredYear=Number(Object.entries(yearCount).sort((a,b)=>b[1]-a[1])[0]?.[0])||new Date().getFullYear();
       updateImportLoading('Processando lançamentos...','Validando datas, valores e categorias.',50);
-      const dataRows=rows.slice(hi+1),parsed=[],skipped=[],newCatMap={},occurrenceMap=new Map();
+      const parsed=[],skipped=[],newCatMap={},occurrenceMap=new Map();
       const cats=loadCats(),allEx=[...cats.expense,...cats.income];
       dataRows.forEach((row,idx)=>{
         if(!row||row.every(v=>v==null||String(v).trim()===''))return;
         const rawDate=row[cDia],rawTipo=cTipo>=0?String(row[cTipo]||'').trim():'',rawDept=String(row[cDept]||'Sem categoria').trim()||'Sem categoria',rawValor=row[cValor],rawDesc=cDesc>=0?String(row[cDesc]||'').trim():'';
-        const dateStr=parseImportDate(rawDate),rawNum=parseImportNumber(rawValor);
+        const dateStr=parseImportDate(rawDate,inferredYear),rawNum=parseImportNumber(rawValor);
         if(!dateStr||!Number.isFinite(rawNum)||rawNum===0){skipped.push(idx+hi+2);return}
         const tipoN=norm(rawTipo),deptN=norm(rawDept);
-        let type='expense';
-        if(/recebid|entrada|receita|income|credito|crédito/.test(tipoN)||(!rawTipo&&rawNum>0))type='income';
-        if(/gasto|despesa|saida|saída|expense|debito|débito/.test(tipoN))type='expense';
-        if(/doacao|doação/.test(deptN))type='expense';
-        const amount=Math.abs(rawNum);
+        let type=null;
+        // Nas planilhas Controle.xlsx/Controle Luiza.xlsx, B é SEMPRE a natureza da operação.
+        // Não inferir pelo valor nem por outra coluna.
+        if(looksLikeControleLayout){
+          if(tipoN==='gasto')type='expense';
+          else if(tipoN==='recebido')type='income';
+          else if(tipoN==='despesa'||tipoN==='saida'||tipoN==='saída')type='expense';
+          else if(tipoN==='receita'||tipoN==='entrada')type='income';
+        }
+        // Regra prioritária e explícita: a palavra da coluna Tipo manda no lançamento.
+        // "Gasto" nunca pode virar receita por causa de valor positivo; "Recebido" nunca pode virar despesa por causa do sinal.
+        if(/^(gasto|despesa|saida|expense|debito)$/.test(tipoN))type='expense';
+        else if(/^(recebido|receita|entrada|income|credito)$/.test(tipoN))type='income';
+        else if(/gasto|despesa|saida|expense|debito/.test(tipoN))type='expense';
+        else if(/recebid|receita|entrada|income|credito/.test(tipoN))type='income';
+        // Só usa o sinal do valor quando realmente não existe uma coluna de tipo utilizável.
+        if(!type&&cTipo<0)type=rawNum<0?'expense':'income';
+        // Se a coluna de tipo existe, mas a célula não é reconhecida, ignora a linha em vez de classificá-la errado.
+        if(!type){skipped.push(idx+hi+2);return}
+        // Mantém compatibilidade histórica do FinTrack para Doação como despesa.
+        if(/doacao/.test(deptN))type='expense';
+        // Despesas são armazenadas positivas; receitas negativas são preservadas como abatimento.
+        const amount=type==='expense'?Math.abs(rawNum):rawNum;
         let catId=null;
         // Primeiro tenta encontrar a categoria no mesmo tipo; evita associar uma despesa
         // a uma categoria homônima cadastrada como receita (e vice-versa).
@@ -2494,7 +2555,8 @@ function handleFile(file){
       });
       pendingImport=parsed;
       document.getElementById('import-filename').textContent=file.name;
-      document.getElementById('import-fileinfo').textContent=`Aba: "${sn}" • ${dataRows.length} linhas • ${parsed.length} válidas`;
+      const gastoCount=parsed.filter(t=>t.type==='expense').length,recebidoCount=parsed.filter(t=>t.type==='income').length;
+      document.getElementById('import-fileinfo').textContent=`Aba: "${sn}" • ${dataRows.length} linhas • ${parsed.length} válidas • Tipo: ${cTipo>=0?'coluna '+String.fromCharCode(65+cTipo):'não detectado'}${looksLikeControleLayout?' (formato Controle confirmado)':''} • Gastos: ${gastoCount} • Recebidos: ${recebidoCount}`;
       document.getElementById('imp-total').textContent=parsed.length+skipped.length;
       document.getElementById('imp-income').textContent=parsed.filter(t=>t.type==='income').length;
       document.getElementById('imp-expense').textContent=parsed.filter(t=>t.type==='expense').length;
