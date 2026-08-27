@@ -1707,7 +1707,7 @@ function openModal(id){
   }
   // auto-calc parcela when amount changes
   document.getElementById('f-amount').oninput=()=>{if(document.getElementById('f-parceled').checked)calcParcelaValor();updateRecurringPreview();updateSharedPreview()};
-  document.getElementById('f-parcelas').oninput=calcParcelaValor;
+  document.getElementById('f-parcelas').oninput=()=>{calcParcelaValor();updateSharedPreview()};
   updateSharedPreview();
 }
 function closeModal(){document.getElementById('modal-bg').classList.remove('open')}
@@ -1765,6 +1765,7 @@ function toggleParcelamento(){
     document.getElementById('f-recurring-row').style.display='none';
     calcParcelaValor();
   }
+  updateSharedPreview();
 }
 function calcParcelaValor(){
   const total=parseFloat(document.getElementById('f-amount').value)||0;
@@ -1806,7 +1807,14 @@ function updateSharedPreview(){
   const total=parseFloat(document.getElementById('f-amount').value)||0;
   const mine=parseFloat(document.getElementById('f-shared-mine-pct').value)||0;
   const partner=parseFloat(document.getElementById('f-shared-partner-pct').value)||0;
-  prev.textContent=`Total ${fmt(total)} → ${profileName(_currentProfile)}: ${fmt(total*mine/100)} (${mine}%) · ${profileName(otherProfile(_currentProfile))}: ${fmt(total*partner/100)} (${partner}%)`;
+  const parceled=document.getElementById('f-parceled')?.checked;
+  const n=parseInt(document.getElementById('f-parcelas')?.value)||2;
+  if(parceled&&n>0){
+    const installment=total/n;
+    prev.textContent=`Total ${fmt(total)} em ${n}x de ${fmt(installment)} → por parcela: ${profileName(_currentProfile)} ${fmt(installment*mine/100)} (${mine}%) · ${profileName(otherProfile(_currentProfile))} ${fmt(installment*partner/100)} (${partner}%)`;
+  }else{
+    prev.textContent=`Total ${fmt(total)} → ${profileName(_currentProfile)}: ${fmt(total*mine/100)} (${mine}%) · ${profileName(otherProfile(_currentProfile))}: ${fmt(total*partner/100)} (${partner}%)`;
+  }
 }
 
 async function saveTransaction(){
@@ -1821,7 +1829,9 @@ async function saveTransaction(){
   const editingId=document.getElementById('f-editing-id').value;
   const isParceled=document.getElementById('f-parceled').checked&&!editingId;
   const isRecurring=document.getElementById('f-recurring').checked&&!editingId;
-  const isShared=document.getElementById('f-shared').checked&&!editingId&&!isParceled;
+  // Compartilhamento e parcelamento podem ser usados juntos.
+  // Antes, !isParceled fazia o compartilhamento ser ignorado quando a compra era parcelada.
+  const isShared=document.getElementById('f-shared').checked&&!editingId;
   if(isRecurring){
     const months=parseInt(document.getElementById('f-recurring-months').value)||12;
     if(months<2||months>120){alert('A recorrência deve ter entre 2 e 120 meses.');return}
@@ -1864,45 +1874,78 @@ async function saveTransaction(){
         });
       }
     }
+  } else if(isParceled){
+    const n=parseInt(document.getElementById('f-parcelas').value)||2;
+    if(n<2||n>120){alert('Número de parcelas deve ser entre 2 e 120.');return}
+
+    const parcelaValor=amount/n;
+    const baseDate=new Date(date+'T12:00');
+    const parcelaGroup='parc_'+Date.now().toString(36);
+    const sharedChecked=isShared;
+    const minePct=parseFloat(document.getElementById('f-shared-mine-pct').value)||0;
+    const partnerPct=parseFloat(document.getElementById('f-shared-partner-pct').value)||0;
+    if(sharedChecked&&Math.round(minePct+partnerPct)!==100){alert('A divisão precisa somar 100%.');return}
+    const partner=otherProfile(_currentProfile);
+
+    for(let i=0;i<n;i++){
+      // Preserva o dia quando possível e evita o rollover de datas como 31/01 -> março.
+      const d=new Date(baseDate);
+      const originalDay=baseDate.getDate();
+      d.setDate(1);
+      d.setMonth(d.getMonth()+i);
+      const lastDay=new Date(d.getFullYear(),d.getMonth()+1,0).getDate();
+      d.setDate(Math.min(originalDay,lastDay));
+      const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      const label=`${desc} (${i+1}/${n})`;
+
+      if(sharedChecked){
+        // Cada parcela vira um grupo compartilhado próprio. Assim, em cada mês,
+        // a parte de cada pessoa aparece no respectivo perfil e o balanço do casal
+        // considera apenas o valor daquela parcela, não o total da compra inteira.
+        const installmentGroup=parcelaGroup+'_sh_'+i;
+        const mineAmount=parseFloat((parcelaValor*minePct/100).toFixed(2));
+        // Calcula a segunda parte por diferença para evitar perda de centavos.
+        const installmentRounded=parseFloat(parcelaValor.toFixed(2));
+        const partnerAmount=parseFloat((installmentRounded-mineAmount).toFixed(2));
+
+        db.transactions.unshift({
+          id:generateTransactionId(),type:currentType,description:label,
+          amount:mineAmount,date:ds,category:cat,owner:_currentProfile,
+          shared:true,groupId:installmentGroup,sharedTotal:installmentRounded,splitPct:minePct,paidBy:_currentProfile,
+          parcelaGroup,parcelaNum:i+1,parcelaTotal:n
+        });
+        db.transactions.unshift({
+          id:generateTransactionId(),type:currentType,description:label,
+          amount:partnerAmount,date:ds,category:cat,owner:partner,
+          shared:true,groupId:installmentGroup,sharedTotal:installmentRounded,splitPct:partnerPct,paidBy:_currentProfile,
+          parcelaGroup,parcelaNum:i+1,parcelaTotal:n
+        });
+      }else{
+        db.transactions.unshift({
+          id:generateTransactionId(),type:currentType,description:label,
+          amount:parseFloat(parcelaValor.toFixed(2)),date:ds,category:cat,
+          parcelaGroup,parcelaNum:i+1,parcelaTotal:n,owner:_currentProfile
+        });
+      }
+    }
   } else if(isShared){
     const minePct=parseFloat(document.getElementById('f-shared-mine-pct').value)||0;
     const partnerPct=parseFloat(document.getElementById('f-shared-partner-pct').value)||0;
     if(Math.round(minePct+partnerPct)!==100){alert('A divisão precisa somar 100%.');return}
     const partner=otherProfile(_currentProfile);
     const groupId='sh_'+Date.now().toString(36);
+    const mineAmount=parseFloat((amount*minePct/100).toFixed(2));
+    const partnerAmount=parseFloat((amount-mineAmount).toFixed(2));
     db.transactions.unshift({
       id:generateTransactionId(),type:currentType,description:desc,
-      amount:parseFloat((amount*minePct/100).toFixed(2)),date,category:cat,
+      amount:mineAmount,date,category:cat,
       owner:_currentProfile,shared:true,groupId,sharedTotal:amount,splitPct:minePct,paidBy:_currentProfile
     });
     db.transactions.unshift({
       id:generateTransactionId(),type:currentType,description:desc,
-      amount:parseFloat((amount*partnerPct/100).toFixed(2)),date,category:cat,
+      amount:partnerAmount,date,category:cat,
       owner:partner,shared:true,groupId,sharedTotal:amount,splitPct:partnerPct,paidBy:_currentProfile
     });
-  } else if(isParceled){
-    const n=parseInt(document.getElementById('f-parcelas').value)||2;
-    if(n<2||n>120){alert('Número de parcelas deve ser entre 2 e 120.');return}
-    const parcelaValor=amount/n;
-    const baseDate=new Date(date+'T12:00');
-    const groupId='parc_'+Date.now().toString(36);
-    for(let i=0;i<n;i++){
-      const d=new Date(baseDate);
-      d.setMonth(d.getMonth()+i);
-      const ds=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-      db.transactions.unshift({
-        id:generateTransactionId(),
-        type:currentType,
-        description:`${desc} (${i+1}/${n})`,
-        amount:parseFloat(parcelaValor.toFixed(2)),
-        date:ds,
-        category:cat,
-        parcelaGroup:groupId,
-        parcelaNum:i+1,
-        parcelaTotal:n,
-        owner:_currentProfile
-      });
-    }
   } else {
     if(editingId){
       const idx=db.transactions.findIndex(t=>t.id===editingId);
