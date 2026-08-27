@@ -1390,6 +1390,11 @@ async function loadAll(){
     _dbPersistedJson=JSON.stringify(_db);
     _cats=catsR?JSON.parse(catsR):JSON.parse(JSON.stringify(DEFAULT_CATS));
     _imports=impsR?JSON.parse(impsR):[];
+    // Remove nomes técnicos visíveis criados por importações de versões antigas.
+    // O ID interno continua imp_expense_xxx/imp_income_xxx, mas a interface mostra apenas o Departamento.
+    if(typeof normalizeImportedCategoryLabels==='function'&&normalizeImportedCategoryLabels(_cats)){
+      await store.set(CATS_KEY,JSON.stringify(_cats));
+    }
     await migrateDoacaoToExpense();
     await migrateOwnerField();
   }catch{}
@@ -2445,6 +2450,44 @@ function updateImportLoading(title,text,pct){
   const n=Math.max(0,Math.min(100,Number(pct)||0));if(b)b.style.width=n+'%';if(p)p.textContent=Math.round(n)+'%';
 }
 function hideImportLoading(delay=250){setTimeout(()=>{const ov=document.getElementById('import-loading-overlay');if(ov)ov.style.display='none'},delay)}
+function friendlyImportedCategoryName(id,name=''){
+  const rawId=String(id||'');
+  const rawName=String(name||'').trim();
+  // Categorias importadas usam um ID técnico para evitar colisões no banco,
+  // mas esse prefixo nunca deve aparecer para o usuário.
+  if(!/^imp_(expense|income)_/i.test(rawId))return rawName||rawId||'Sem categoria';
+
+  const technicalFromId=rawId.replace(/^imp_(expense|income)_/i,'').replace(/_/g,' ').trim();
+  const technicalName=rawName
+    .replace(/^imp_(expense|income)_/i,'')
+    .replace(/^(expense|income)[ _-]+/i,'')
+    .replace(/_/g,' ')
+    .trim();
+  const base=(technicalName&&technicalName.toLowerCase()!==rawId.toLowerCase())?technicalName:technicalFromId;
+  if(!base)return 'Sem categoria';
+  return base.split(/\s+/).map(w=>{
+    const up=w.toUpperCase();
+    // Mantém siglas comuns curtas em maiúsculas.
+    if(w.length<=3&&/^[a-zA-Z]+$/.test(w))return up;
+    return w.charAt(0).toUpperCase()+w.slice(1).toLowerCase();
+  }).join(' ');
+}
+function importCategoryDisplayName(t){
+  if(t?._importCategoryName)return String(t._importCategoryName);
+  const c=getCat(t?.category);
+  return friendlyImportedCategoryName(t?.category,c?.name);
+}
+function normalizeImportedCategoryLabels(cats){
+  let changed=false;
+  ['expense','income'].forEach(type=>{
+    (cats[type]||[]).forEach(c=>{
+      if(!c||!/^imp_(expense|income)_/i.test(String(c.id||'')))return;
+      const cleaned=friendlyImportedCategoryName(c.id,c.name);
+      if(cleaned&&c.name!==cleaned){c.name=cleaned;changed=true;}
+    });
+  });
+  return changed;
+}
 function handleFile(file){
   if(!file)return;
   showImportLoading('Carregando Excel...',file.name,5);
@@ -2551,7 +2594,7 @@ function handleFile(file){
         // no mesmo arquivo e ainda permite reconhecer a mesma planilha numa reimportação.
         const fingerprint=`${type}_${dateStr}_${amount.toFixed(2)}_${catId}_${norm(rawDesc||rawDept).slice(0,80)}`;
         const occurrence=(occurrenceMap.get(fingerprint)||0)+1;occurrenceMap.set(fingerprint,occurrence);
-        parsed.push({id:null,_importFingerprint:fingerprint,_importOccurrence:occurrence,type,description:rawDesc||rawDept,amount,date:dateStr,category:catId,clientUpdatedAt:Date.now()+idx});
+        parsed.push({id:null,_importFingerprint:fingerprint,_importOccurrence:occurrence,_importCategoryName:rawDept,type,description:rawDesc||rawDept,amount,date:dateStr,category:catId,clientUpdatedAt:Date.now()+idx});
       });
       pendingImport=parsed;
       document.getElementById('import-filename').textContent=file.name;
@@ -2561,7 +2604,7 @@ function handleFile(file){
       document.getElementById('imp-income').textContent=parsed.filter(t=>t.type==='income').length;
       document.getElementById('imp-expense').textContent=parsed.filter(t=>t.type==='expense').length;
       document.getElementById('imp-skip').textContent=skipped.length;
-      document.getElementById('import-tbody').innerHTML=parsed.slice(0,20).map(t=>{const d=new Date(t.date+'T12:00'),color=t.type==='income'?'var(--green)':'var(--red)',sign=t.type==='income'?'+':'-';return`<tr><td>${d.toLocaleDateString('pt-BR')}</td><td style="color:${color}">${t.type==='income'?'Receita':'Despesa'}</td><td>${getCat(t.category).name||t.category}</td><td style="color:${color};font-family:DM Mono">${sign} ${fmt(t.amount)}</td><td>${t.description}</td></tr>`}).join('');
+      document.getElementById('import-tbody').innerHTML=parsed.slice(0,20).map(t=>{const d=new Date(t.date+'T12:00'),color=t.type==='income'?'var(--green)':'var(--red)',sign=t.type==='income'?'+':'-';return`<tr><td>${d.toLocaleDateString('pt-BR')}</td><td style="color:${color}">${t.type==='income'?'Receita':'Despesa'}</td><td>${importCategoryDisplayName(t)}</td><td style="color:${color};font-family:DM Mono">${sign} ${fmt(t.amount)}</td><td>${t.description}</td></tr>`}).join('');
       const newCats=Object.values(newCatMap);
       document.getElementById('import-new-cats').innerHTML=newCats.length?newCats.map(c=>`<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;border-radius:20px;background:var(--bg3);border:1px solid var(--border);font-size:12px"><span style="width:7px;height:7px;border-radius:50%;background:${c.color}"></span>${c.icon} ${c.name}</span>`).join(''):'<span style="font-size:12px;color:var(--text3)">Todas já existem</span>';
       const warn=document.getElementById('import-warn');
@@ -2656,8 +2699,23 @@ async function confirmImport(){
   try{
     const skipDup=document.getElementById('imp-skip-dup').checked;
     const importOwner=document.getElementById('imp-owner')?.value||_currentProfile;
-    const cats=loadCats(),allIds=new Set([...cats.expense,...cats.income].map(c=>c.id));
-    pendingImport.forEach(t=>{t.owner=importOwner;if(!allIds.has(t.category)){cats[t.type]=cats[t.type]||[];cats[t.type].push({id:t.category,name:t.category.replace('imp_','').replace(/_/g,' '),icon:'🏷️',color:randomColor(),builtin:false});allIds.add(t.category)}});
+    const cats=loadCats();
+    // Corrige também categorias técnicas criadas por versões anteriores
+    // (ex.: "expense uber" / "imp_expense_uber") para um nome amigável.
+    normalizeImportedCategoryLabels(cats);
+    const allIds=new Set([...cats.expense,...cats.income].map(c=>c.id));
+    pendingImport.forEach(t=>{
+      t.owner=importOwner;
+      if(!allIds.has(t.category)){
+        cats[t.type]=cats[t.type]||[];
+        cats[t.type].push({
+          id:t.category,
+          name:String(t._importCategoryName||friendlyImportedCategoryName(t.category)).trim()||'Sem categoria',
+          icon:'🏷️',color:randomColor(),builtin:false
+        });
+        allIds.add(t.category);
+      }
+    });
     updateImportLoading('Preparando categorias...','Organizando categorias da planilha.',30);
     // Evita sincronizar categorias antes das transações estarem preparadas.
     _cats=cats;await store.set(CATS_KEY,JSON.stringify(cats));
@@ -2667,7 +2725,7 @@ async function confirmImport(){
       const base=`${importOwner}_${src._importFingerprint||`${src.type}_${src.date}_${src.amount}_${src.category}_${src.description}`}_${src._importOccurrence||1}`;
       const deterministicId='imp_tx_'+simpleHash(base);
       const t={...src,id:deterministicId,owner:importOwner,clientUpdatedAt:Date.now()+added};
-      delete t._importFingerprint;delete t._importOccurrence;
+      delete t._importFingerprint;delete t._importOccurrence;delete t._importCategoryName;
       if(existingIds.has(String(t.id))){
         if(skipDup){dupes++;continue}
         t.id=generateTransactionId();
