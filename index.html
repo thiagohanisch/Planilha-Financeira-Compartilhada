@@ -976,6 +976,7 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
       </div>
       <div style="font-size:11px;color:var(--text3);margin-top:8px" id="f-shared-preview">—</div>
     </div>
+    <div id="f-shared-edit-note" style="display:none;background:var(--bg3);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:13px;font-size:12px;color:var(--text2)"></div>
     <!-- Parcelamento -->
     <div class="form-row" style="margin-top:4px">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:var(--text2)">
@@ -1675,9 +1676,12 @@ function openModal(id){
   // hide parcelamento when editing
   document.getElementById('f-parceled').closest('.form-row').style.display=id?'none':'block';
   document.getElementById('f-parcelas-row').style.display='none';
-  // reset compartilhado
+  // reset compartilhado — nunca destrói os controles; eles precisam existir ao reabrir o modal
   document.getElementById('f-shared').checked=false;
+  document.getElementById('f-shared-row').style.display='none';
   document.getElementById('f-shared-split-row').style.display='none';
+  const sharedEditNote=document.getElementById('f-shared-edit-note');
+  if(sharedEditNote){sharedEditNote.style.display='none';sharedEditNote.textContent=''}
   document.getElementById('f-shared-mine-pct').value=50;
   document.getElementById('f-shared-partner-pct').value=50;
   document.getElementById('f-shared-partner-name').textContent=profileName(otherProfile(_currentProfile));
@@ -1692,11 +1696,14 @@ function openModal(id){
     const c=getCat(t.category);
     document.getElementById('f-cat').value=t.category;
     document.getElementById('f-cat-search').value=c.icon+' '+c.name;
-    // não permite alterar o compartilhamento na edição — só na criação
+    // não permite alterar o compartilhamento na edição — só na criação.
+    // IMPORTANTE: não substituir innerHTML de f-shared-split-row, pois isso apagava
+    // os campos de percentuais e fazia a opção Compartilhado desaparecer nas próximas aberturas.
     document.getElementById('f-shared-row').style.display='none';
-    if(t.shared){
-      document.getElementById('f-shared-split-row').style.display='block';
-      document.getElementById('f-shared-split-row').innerHTML=`<div style="font-size:12px;color:var(--text2)">🤝 Esta transação faz parte de um gasto compartilhado (total ${fmt(t.sharedTotal||0)}, pago por ${profileName(t.paidBy)}). Editar aqui só ajusta esta linha — a parte do(a) ${profileName(otherProfile(t.owner))} não muda automaticamente. Se precisar desfazer a divisão, exclua e lance novamente.</div>`;
+    document.getElementById('f-shared-split-row').style.display='none';
+    if(t.shared && sharedEditNote){
+      sharedEditNote.style.display='block';
+      sharedEditNote.textContent=`🤝 Esta transação faz parte de um gasto compartilhado (total ${fmt(t.sharedTotal||0)}, pago por ${profileName(t.paidBy)}). Editar aqui só ajusta esta linha — a parte do(a) ${profileName(otherProfile(t.owner))} não muda automaticamente. Se precisar desfazer a divisão, exclua e lance novamente.`;
     }
   }else{
     document.getElementById('f-date').value=new Date().toISOString().split('T')[0];
@@ -1725,6 +1732,9 @@ function setType(type){
   // parcelamento só faz sentido para despesas
   const pRow=document.getElementById('f-parceled').closest('.form-row');
   const rRow=document.getElementById('f-recurring-check-row');
+  const sRow=document.getElementById('f-shared-row');
+  const editing=!!document.getElementById('f-editing-id').value;
+  if(sRow)sRow.style.display=(type==='expense'&&!editing)?'block':'none';
   if(type==='income'){
     document.getElementById('f-parceled').checked=false;
     document.getElementById('f-parcelas-row').style.display='none';
