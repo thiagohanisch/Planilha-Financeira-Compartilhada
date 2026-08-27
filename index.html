@@ -1518,45 +1518,41 @@ async function syncTransactionsToCloud(showFeedback=false){
     if(!dirty.length && !deleted.length)return true;
     if(showFeedback)logCloud('⏳ Enviando transações...');
 
+    // Cada alteração local DEVE ser confirmada pelo Firebase. A transaction() abaixo
+    // não cancela uma gravação com base no relógio do aparelho (isso fazia alterações
+    // legítimas serem descartadas). Em vez disso, o Firebase incrementa uma revisão
+    // monotônica por registro e a última operação realmente confirmada prevalece.
     for(const id of dirty){
       const tx=localMap[id]; if(!tx)continue;
       const key=firebaseSafeKey(id);
       const ref=realtimeDb.ref('fintrack/transactions').child(key);
-      const localVersion=Number(tx.clientUpdatedAt||Date.now());
-      tx.clientUpdatedAt=localVersion;
-      const payload={...tx,id:String(tx.id),firebaseKey:key,clientUpdatedAt:localVersion,updatedAt:firebase.database.ServerValue.TIMESTAMP,updatedBy:uid};
-
-      // TRANSACTION evita o comportamento "último set() vence" entre dois aparelhos.
-      // Se já existir no Firebase uma versão mais nova, a gravação local é abortada.
-      let conflict=false;
+      const localVersion=Math.max(Date.now(),Number(tx.clientUpdatedAt||0));
       const result=await ref.transaction(current=>{
-        if(current){
-          const remoteVersion=Number(current.clientUpdatedAt||0);
-          if(remoteVersion>localVersion){conflict=true;return;}
-        }
-        return payload;
+        const revision=Number(current?.revision||0)+1;
+        return {
+          ...tx,
+          id:String(tx.id),
+          firebaseKey:key,
+          clientUpdatedAt:localVersion,
+          revision,
+          updatedAt:firebase.database.ServerValue.TIMESTAMP,
+          updatedBy:uid
+        };
       },undefined,false);
 
       if(!result.committed){
-        const remote=result.snapshot?.val?.()||(await ref.once('value')).val();
-        if(remote){
-          _cloudTxMap[key]=remote;
-          _localDirtyIds.delete(id);
-          const idx=_db.transactions.findIndex(t=>String(t.id)===String(id));
-          if(idx>=0)_db.transactions[idx]=remote;
-          _suppressAutoSync=true;
-          try{await saveDB(_db)}finally{_suppressAutoSync=false}
-        }
-        if(conflict)logCloud('⚠ Conflito evitado: o Firebase já tinha uma versão mais nova de '+key+'.');
-        continue;
+        throw new Error('O Firebase não confirmou a gravação. Caminho: fintrack/transactions/'+key);
       }
-
       const saved=result.snapshot.val();
       if(!saved || String(saved.id)!==String(tx.id)){
-        throw new Error('Gravação não pôde ser confirmada após a transaction(). Caminho: fintrack/transactions/'+key);
+        throw new Error('Gravação não pôde ser confirmada. Caminho: fintrack/transactions/'+key);
       }
       _cloudTxMap[key]=saved;
       _localDirtyIds.delete(id);
+      const idx=_db.transactions.findIndex(t=>String(t.id)===String(id));
+      if(idx>=0){
+        _db.transactions[idx]={..._db.transactions[idx],clientUpdatedAt:saved.clientUpdatedAt||localVersion,revision:saved.revision};
+      }
       if(showFeedback)logCloud('✓ Registro confirmado no Firebase: '+key);
     }
 
@@ -1567,6 +1563,10 @@ async function syncTransactionsToCloud(showFeedback=false){
       if(check.exists())throw new Error('Exclusão não foi confirmada: '+key);
       delete _cloudTxMap[key]; _localDeletedIds.delete(id);
     }
+
+    // Persiste localmente as revisões confirmadas sem gerar um novo ciclo de sync.
+    _suppressAutoSync=true;
+    try{await saveDB(_db)}finally{_suppressAutoSync=false}
     _lastCloudSyncAt=Date.now(); renderCloudSection(); return true;
   };
   _cloudWriteQueue=_cloudWriteQueue.then(run,run);
@@ -2951,13 +2951,22 @@ async function syncFromCloud(showFeedback=false){
     let data=snap.val();
 
     if(!data){
-      logCloud('⚠ Banco ainda está vazio. Os dados locais serão enviados ao Firebase.');
+      // A nuvem vazia é tratada como estado válido e autoritativo. Antes, o sistema
+      // reenviava automaticamente a cópia local e "ressuscitava" dados apagados.
+      logCloud('✓ Firebase está vazio. A base local também será limpa para manter consistência.');
       _cloudTxMap={};
       _lastRemoteSignature=remoteSemanticSignature({});
-      (_db.transactions||[]).forEach(t=>_localDirtyIds.add(String(t.id)));
-      // O banco remoto está vazio: envia a base local antes de abrir o listener.
-      await syncToCloud(showFeedback);
+      _localDirtyIds.clear();
+      _localDeletedIds.clear();
+      _suppressAutoSync=true;
+      try{
+        await saveDB({transactions:[]});
+        await saveCats(JSON.parse(JSON.stringify(DEFAULT_CATS)));
+        await saveImports([]);
+      }finally{_suppressAutoSync=false}
       attachTransactionsListener();
+      populateAllSelects();
+      refreshAll();
       return true;
     }
 
@@ -3047,7 +3056,27 @@ function renderResetSection(){
 async function resetTransactions(){
   const db=loadDB();if(!db.transactions.length){alert('Não há transações.');return}
   if(!confirm(`Apagar ${db.transactions.length} transações?`))return;
-  await saveDBAndSync({transactions:[]});populateAllSelects();renderResetSection();refreshAll();alert('✓ Transações apagadas.');
+  if(!auth?.currentUser||!realtimeDb){alert('Firebase não autenticado. Não foi possível apagar a base com segurança.');return}
+  try{
+    logCloud('⏳ Apagando todas as transações no Firebase...');
+    _suppressAutoSync=true;
+    if(_transactionsListener)realtimeDb.ref('fintrack/transactions').off('value',_transactionsListener);
+    _transactionsListener=null;
+    await realtimeDb.ref('fintrack/transactions').remove();
+    const check=await realtimeDb.ref('fintrack/transactions').once('value');
+    if(check.exists())throw new Error('O Firebase ainda contém transações após a exclusão.');
+    _cloudTxMap={};_localDirtyIds.clear();_localDeletedIds.clear();
+    _lastRemoteSignature=remoteSemanticSignature({});
+    await saveDB({transactions:[]});
+    await realtimeDb.ref('fintrack/metadata').update({updated:firebase.database.ServerValue.TIMESTAMP,updatedBy:auth.currentUser.uid,lastResetTransactionsAt:firebase.database.ServerValue.TIMESTAMP});
+    logCloud('✓ Todas as transações foram apagadas e confirmadas no Firebase.');
+  }catch(err){
+    logCloud('✗ Falha ao apagar transações: '+formatFirebaseWriteError(err));
+    alert('Não foi possível apagar as transações no Firebase.\n\n'+err.message);return;
+  }finally{
+    _suppressAutoSync=false;attachTransactionsListener();
+  }
+  populateAllSelects();renderResetSection();refreshAll();alert('✓ Transações apagadas da nuvem e deste aparelho.');
 }
 async function resetCustomCats(){
   const cats=loadCats(),total=cats.expense.filter(c=>!c.builtin).length+cats.income.filter(c=>!c.builtin).length;
@@ -3063,8 +3092,48 @@ async function resetImportHistory(){
 async function resetAll(){
   const cb=document.getElementById('confirm-reset-all');if(!cb?.checked){alert('Marque a confirmação.');return}
   if(!confirm('Apagar TUDO? Irreversível.'))return;
-  await saveDBAndSync({transactions:[]});await saveCats(JSON.parse(JSON.stringify(DEFAULT_CATS)));await saveImports([]);
-  populateAllSelects();renderResetSection();refreshAll();alert('✓ Tudo apagado.');
+  if(!auth?.currentUser||!realtimeDb){alert('Firebase não autenticado. Não foi possível apagar a base com segurança.');return}
+  try{
+    logCloud('⏳ Zerando a base completa no Firebase...');
+    _suppressAutoSync=true;
+    if(_transactionsListener)realtimeDb.ref('fintrack/transactions').off('value',_transactionsListener);
+    _transactionsListener=null;
+    clearTimeout(_remoteApplyTimer);_pendingRemoteSnapshot=null;
+
+    const defaults=JSON.parse(JSON.stringify(DEFAULT_CATS));
+    // Atualização única: remove transações e histórico e restaura categorias padrão.
+    // Mantemos metadata para que uma instalação antiga reconheça que a nuvem foi zerada,
+    // em vez de reenviar uma cópia local antiga ao abrir a página.
+    await realtimeDb.ref('fintrack').update({
+      transactions:null,
+      categories:JSON.stringify(defaults),
+      imports:JSON.stringify([]),
+      db:null,
+      cats:null,
+      metadata:{
+        updated:firebase.database.ServerValue.TIMESTAMP,
+        updatedBy:auth.currentUser.uid,
+        resetAt:firebase.database.ServerValue.TIMESTAMP,
+        resetToken:generateTransactionId()
+      }
+    });
+
+    const check=await realtimeDb.ref('fintrack/transactions').once('value');
+    if(check.exists())throw new Error('O Firebase ainda contém transações após o reset.');
+
+    _cloudTxMap={};_localDirtyIds.clear();_localDeletedIds.clear();
+    _lastRemoteSignature=remoteSemanticSignature({});
+    await saveDB({transactions:[]});
+    await saveCats(defaults);
+    await saveImports([]);
+    logCloud('✓ Base completa zerada e confirmada no Firebase.');
+  }catch(err){
+    logCloud('✗ Falha ao zerar a base: '+formatFirebaseWriteError(err));
+    alert('Não foi possível zerar a base no Firebase.\n\n'+err.message);return;
+  }finally{
+    _suppressAutoSync=false;attachTransactionsListener();
+  }
+  populateAllSelects();renderResetSection();refreshAll();alert('✓ Tudo apagado da nuvem e deste aparelho.');
 }
 
 // ===================== REFRESH =====================
