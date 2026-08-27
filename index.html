@@ -2537,24 +2537,34 @@ function handleFile(file){
         if(bestCol>=0)cTipo=bestCol;
       }
       if(cDept<0)cDept=2;if(cDesc<0)cDesc=4;
-      // Descobre o ano predominante a partir das datas Excel válidas. Isso permite
-      // recuperar datas antigas digitadas como 18.02 (18 de fevereiro) sem ano.
-      const yearCount={};
-      for(const r of dataRows.slice(0,300)){
-        const v=(r||[])[cDia];
-        let y=null;
-        if(v instanceof Date&&!isNaN(v))y=v.getFullYear();
-        else if(typeof v==='number'&&Number.isFinite(v)&&v>=1000){const d=XLSX.SSF.parse_date_code(v);if(d)y=d.y;}
-        else{const m=String(v??'').trim().match(/(?:^|[\/\-.])(\d{4})$/);if(m)y=Number(m[1]);}
-        if(y>=1900&&y<=2200)yearCount[y]=(yearCount[y]||0)+1;
+      // Identifica o ano linha a linha. Não usa apenas um "ano predominante":
+      // uma planilha pode conter mais de um ano. Datas sem ano (ex.: 18.02 ou 18/02)
+      // herdam o ano da data completa mais próxima na própria planilha.
+      function explicitImportYear(v){
+        if(v instanceof Date&&!isNaN(v))return v.getFullYear();
+        if(typeof v==='number'&&Number.isFinite(v)&&v>=1000){const d=XLSX.SSF.parse_date_code(v);return d?.y||null;}
+        const str=String(v??'').trim();
+        let m=str.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);if(m)return Number(m[3]);
+        m=str.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);if(m)return Number(m[1]);
+        return null;
       }
-      const inferredYear=Number(Object.entries(yearCount).sort((a,b)=>b[1]-a[1])[0]?.[0])||new Date().getFullYear();
+      const explicitYears=dataRows.map(r=>explicitImportYear((r||[])[cDia]));
+      const prevYear=[],nextYear=[];
+      let last=null;
+      for(let i=0;i<explicitYears.length;i++){if(explicitYears[i]>=1900&&explicitYears[i]<=2200)last=explicitYears[i];prevYear[i]=last;}
+      last=null;
+      for(let i=explicitYears.length-1;i>=0;i--){if(explicitYears[i]>=1900&&explicitYears[i]<=2200)last=explicitYears[i];nextYear[i]=last;}
+      const yearCount={};explicitYears.forEach(y=>{if(y>=1900&&y<=2200)yearCount[y]=(yearCount[y]||0)+1;});
+      const fallbackYear=Number(Object.entries(yearCount).sort((a,b)=>b[1]-a[1])[0]?.[0])||new Date().getFullYear();
+      const rowYear=i=>explicitYears[i]||prevYear[i]||nextYear[i]||fallbackYear;
+      const detectedYears=Object.keys(yearCount).map(Number).sort((a,b)=>a-b);
       updateImportLoading('Processando lançamentos...','Validando datas, valores e categorias.',50);
       const parsed=[],skipped=[],newCatMap={},occurrenceMap=new Map();
       const cats=loadCats(),allEx=[...cats.expense,...cats.income];
       dataRows.forEach((row,idx)=>{
         if(!row||row.every(v=>v==null||String(v).trim()===''))return;
         const rawDate=row[cDia],rawTipo=cTipo>=0?String(row[cTipo]||'').trim():'',rawDept=String(row[cDept]||'Sem categoria').trim()||'Sem categoria',rawValor=row[cValor],rawDesc=cDesc>=0?String(row[cDesc]||'').trim():'';
+        const inferredYear=rowYear(idx);
         const dateStr=parseImportDate(rawDate,inferredYear),rawNum=parseImportNumber(rawValor);
         if(!dateStr||!Number.isFinite(rawNum)||rawNum===0){skipped.push(idx+hi+2);return}
         const tipoN=norm(rawTipo),deptN=norm(rawDept);
@@ -2600,6 +2610,8 @@ function handleFile(file){
       document.getElementById('import-filename').textContent=file.name;
       const gastoCount=parsed.filter(t=>t.type==='expense').length,recebidoCount=parsed.filter(t=>t.type==='income').length;
       document.getElementById('import-fileinfo').textContent=`Aba: "${sn}" • ${dataRows.length} linhas • ${parsed.length} válidas • Tipo: ${cTipo>=0?'coluna '+String.fromCharCode(65+cTipo):'não detectado'}${looksLikeControleLayout?' (formato Controle confirmado)':''} • Gastos: ${gastoCount} • Recebidos: ${recebidoCount}`;
+      const yearInfo=detectedYears.length===1?` • Ano identificado: ${detectedYears[0]}`:(detectedYears.length>1?` • Anos identificados: ${detectedYears[0]}–${detectedYears[detectedYears.length-1]}`:' • Ano não identificado');
+      document.getElementById('import-fileinfo').textContent+=yearInfo;
       document.getElementById('imp-total').textContent=parsed.length+skipped.length;
       document.getElementById('imp-income').textContent=parsed.filter(t=>t.type==='income').length;
       document.getElementById('imp-expense').textContent=parsed.filter(t=>t.type==='expense').length;
