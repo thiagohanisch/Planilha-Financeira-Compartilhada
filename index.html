@@ -2501,6 +2501,41 @@ function handleFile(file){
   reader.readAsArrayBuffer(file);
 }
 function simpleHash(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(36)}
+async function syncImportedTransactionsBulk(ids,onProgress){
+  if(!ids?.length)return true;
+  if(!auth?.currentUser||!realtimeDb)throw new Error('Firebase não autenticado.');
+  const uid=auth.currentUser.uid;
+  const localMap=txArrayToMap(_db.transactions);
+  const unique=[...new Set(ids.map(String))];
+  const CHUNK_SIZE=200;
+  let done=0;
+
+  for(let i=0;i<unique.length;i+=CHUNK_SIZE){
+    const chunk=unique.slice(i,i+CHUNK_SIZE);
+    const updates={};
+    const now=Date.now();
+    for(const id of chunk){
+      const tx=localMap[id];if(!tx)continue;
+      const key=firebaseSafeKey(id);
+      const clientUpdatedAt=Number(tx.clientUpdatedAt||now);
+      tx.clientUpdatedAt=clientUpdatedAt;
+      updates[key]={...tx,id:String(tx.id),firebaseKey:key,clientUpdatedAt,updatedAt:firebase.database.ServerValue.TIMESTAMP,updatedBy:uid};
+    }
+    if(Object.keys(updates).length){
+      await realtimeDb.ref('fintrack/transactions').update(updates);
+      for(const id of chunk){
+        _localDirtyIds.delete(id);
+        const tx=localMap[id];if(tx)_cloudTxMap[firebaseSafeKey(id)]=tx;
+      }
+    }
+    done=Math.min(i+chunk.length,unique.length);
+    if(typeof onProgress==='function')onProgress(done,unique.length);
+    // Devolve o controle à UI para atualizar a barra entre os blocos.
+    await new Promise(resolve=>setTimeout(resolve,0));
+  }
+  _lastCloudSyncAt=Date.now();renderCloudSection();return true;
+}
+
 async function confirmImport(){
   if(!pendingImport.length){alert('Nenhum dado para importar.');return}
   const btn=document.getElementById('btn-confirm-import');btn.textContent='⏳ Importando...';btn.disabled=true;
@@ -2514,19 +2549,34 @@ async function confirmImport(){
     // Evita sincronizar categorias antes das transações estarem preparadas.
     _cats=cats;await store.set(CATS_KEY,JSON.stringify(cats));
     const db=loadDB(),existingIds=new Set(db.transactions.map(t=>String(t.id)));
-    let added=0,dupes=0;
+    let added=0,dupes=0,addedIds=[];
     for(const src of pendingImport){
       const t={...src,owner:importOwner,clientUpdatedAt:Date.now()+added};
       if(existingIds.has(String(t.id))){
         if(skipDup){dupes++;continue}
         t.id=generateTransactionId();
       }
-      db.transactions.push(t);existingIds.add(String(t.id));added++;
+      db.transactions.push(t);existingIds.add(String(t.id));addedIds.push(String(t.id));added++;
     }
     db.transactions.sort((a,b)=>new Date(b.date)-new Date(a.date));
-    updateImportLoading('Salvando transações...',added+' lançamento(s) sendo salvos.',60);
-    await saveDBAndSync(db);
-    updateImportLoading('Sincronizando...', 'Enviando dados para a nuvem.',82);
+    updateImportLoading('Salvando transações...',added+' lançamento(s) sendo salvos localmente.',55);
+
+    // IMPORTAÇÃO EM LOTE:
+    // saveDBAndSync() envia cada ID pendente individualmente via transaction(), o que
+    // para 1.000+ linhas pode levar vários minutos. Na importação os IDs são novos
+    // (ou duplicatas já foram filtradas), então salvamos localmente e enviamos os
+    // novos lançamentos ao Firebase em blocos.
+    await saveDB(db);
+
+    const importedIds=addedIds;
+
+    updateImportLoading('Enviando para a nuvem...',`0 de ${importedIds.length} lançamento(s) enviados.`,60);
+    await syncImportedTransactionsBulk(importedIds,(done,total)=>{
+      const pct=60+(total?Math.round((done/total)*30):30);
+      updateImportLoading('Enviando para a nuvem...',`${done} de ${total} lançamento(s) enviados.`,pct);
+    });
+
+    updateImportLoading('Sincronizando categorias...','Finalizando os dados da importação.',92);
     await realtimeDb.ref('fintrack/categories').set(JSON.stringify(_cats));
     const history=loadImports();history.unshift({date:new Date().toISOString(),added,dupes,total:pendingImport.length});
     _imports=history.slice(0,20);await store.set(IMP_KEY,JSON.stringify(_imports));
