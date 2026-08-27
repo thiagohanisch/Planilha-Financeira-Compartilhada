@@ -1580,7 +1580,7 @@ function scheduleAutoSync(){
 async function autoSyncToCloud(){
   if(_syncInProgress){_syncPending=true;return}
   _syncInProgress=true;
-  try{await syncTransactionsToCloud(false)}
+  try{await syncToCloud(false)}
   finally{_syncInProgress=false;if(_syncPending){_syncPending=false;scheduleAutoSync()}}
 }
 
@@ -2405,18 +2405,25 @@ function parseImportNumber(v){
   if(s.includes(','))s=s.replace(/\./g,'').replace(',','.');
   return Number(s);
 }
+function validYMD(y,m,d){
+  y=Number(y);m=Number(m);d=Number(d);
+  if(!Number.isInteger(y)||!Number.isInteger(m)||!Number.isInteger(d)||y<1900||y>2200||m<1||m>12||d<1||d>31)return '';
+  const dt=new Date(y,m-1,d,12,0,0);
+  if(dt.getFullYear()!==y||dt.getMonth()!==m-1||dt.getDate()!==d)return '';
+  return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+}
 function parseImportDate(v){
-  if(v instanceof Date&&!isNaN(v))return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,'0')}-${String(v.getDate()).padStart(2,'0')}`;
+  if(v instanceof Date&&!isNaN(v))return validYMD(v.getFullYear(),v.getMonth()+1,v.getDate());
   if(typeof v==='number'&&Number.isFinite(v)){
     const d=XLSX.SSF.parse_date_code(v);
-    if(d)return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+    if(d)return validYMD(d.y,d.m,d.d);
   }
   const s=String(v??'').trim(); if(!s)return '';
   let m=s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-  if(m){let y=Number(m[3]);if(y<100)y+=2000;return `${y}-${String(Number(m[2])).padStart(2,'0')}-${String(Number(m[1])).padStart(2,'0')}`}
+  if(m){let y=Number(m[3]);if(y<100)y+=2000;return validYMD(y,Number(m[2]),Number(m[1]));}
   m=s.match(/^(\d{4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/);
-  if(m)return `${m[1]}-${String(Number(m[2])).padStart(2,'0')}-${String(Number(m[3])).padStart(2,'0')}`;
-  const d=new Date(s);return isNaN(d)?'':`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  if(m)return validYMD(Number(m[1]),Number(m[2]),Number(m[3]));
+  const d=new Date(s);return isNaN(d)?'':validYMD(d.getFullYear(),d.getMonth()+1,d.getDate());
 }
 function showImportLoading(title='Carregando arquivo...',text='Aguarde enquanto os dados são processados.',pct=8){
   const ov=document.getElementById('import-loading-overlay');if(!ov)return;
@@ -2452,12 +2459,12 @@ function handleFile(file){
       const hdr=(rows[hi]||[]).map(norm);
       const findCol=(rx)=>hdr.findIndex(h=>rx.test(h));
       const cDia=findCol(/^(dia|data|date)$/),cValor=findCol(/^(valor|value|amount|total)$/);
-      let cTipo=findCol(/^(tipo|type|natureza|movimento)$/);
+      let cTipo=findCol(/^(tipo|type|natureza|movimento|gasto\s*[\/\-]\s*recebido|gasto recebido|gasto\/recebido)$/);
       let cDept=findCol(/^(departamento|categoria|category|dept|grupo)$/);
       let cDesc=findCol(/^(descricao|descrição|description|historico|histórico|detalhe)$/);
       if(cDept<0)cDept=2;if(cDesc<0)cDesc=4;
       updateImportLoading('Processando lançamentos...','Validando datas, valores e categorias.',50);
-      const dataRows=rows.slice(hi+1),parsed=[],skipped=[],newCatMap={};
+      const dataRows=rows.slice(hi+1),parsed=[],skipped=[],newCatMap={},occurrenceMap=new Map();
       const cats=loadCats(),allEx=[...cats.expense,...cats.income];
       dataRows.forEach((row,idx)=>{
         if(!row||row.every(v=>v==null||String(v).trim()===''))return;
@@ -2471,11 +2478,19 @@ function handleFile(file){
         if(/doacao|doação/.test(deptN))type='expense';
         const amount=Math.abs(rawNum);
         let catId=null;
-        for(const c of allEx){if(deptN===norm(c.name)){catId=c.id;break}}
-        if(!catId){catId='imp_'+(slugify(rawDept)||'sem_categoria');if(!newCatMap[catId])newCatMap[catId]={id:catId,name:rawDept,type,icon:'🏷️',color:randomColor()}}
-        const fingerprint=`${dateStr}_${amount.toFixed(2)}_${catId}_${norm(rawDesc||rawDept).slice(0,30)}`;
-        const id='imp_tx_'+slugify(fingerprint)+'_'+simpleHash(fingerprint);
-        parsed.push({id,type,description:rawDesc||rawDept,amount,date:dateStr,category:catId,clientUpdatedAt:Date.now()+idx});
+        // Primeiro tenta encontrar a categoria no mesmo tipo; evita associar uma despesa
+        // a uma categoria homônima cadastrada como receita (e vice-versa).
+        const sameType=(cats[type]||[]).find(c=>deptN===norm(c.name));
+        if(sameType)catId=sameType.id;
+        if(!catId){
+          catId='imp_'+type+'_'+(slugify(rawDept)||'sem_categoria');
+          if(!newCatMap[catId])newCatMap[catId]={id:catId,name:rawDept,type,icon:'🏷️',color:randomColor()};
+        }
+        // A chave-base inclui tipo. A ocorrência preserva duas linhas idênticas legítimas
+        // no mesmo arquivo e ainda permite reconhecer a mesma planilha numa reimportação.
+        const fingerprint=`${type}_${dateStr}_${amount.toFixed(2)}_${catId}_${norm(rawDesc||rawDept).slice(0,80)}`;
+        const occurrence=(occurrenceMap.get(fingerprint)||0)+1;occurrenceMap.set(fingerprint,occurrence);
+        parsed.push({id:null,_importFingerprint:fingerprint,_importOccurrence:occurrence,type,description:rawDesc||rawDept,amount,date:dateStr,category:catId,clientUpdatedAt:Date.now()+idx});
       });
       pendingImport=parsed;
       document.getElementById('import-filename').textContent=file.name;
@@ -2508,11 +2523,8 @@ async function syncImportedTransactionsBulk(ids,onProgress){
   const localMap=txArrayToMap(_db.transactions);
   const unique=[...new Set(ids.map(String))];
 
-  // IMPORTANTE: não usamos update() no nó pai "fintrack/transactions".
-  // Dependendo das regras do Realtime Database, uma gravação multipath no pai pode
-  // ser recusada mesmo quando a escrita em cada filho é permitida. Cada lançamento
-  // é salvo diretamente no próprio caminho, mas em pequenos grupos paralelos para
-  // continuar rápido em importações grandes.
+  // Cada lançamento é salvo no próprio caminho em pequenos grupos paralelos.
+  // A transaction() preserva uma versão remota mais nova e mantém a importação rápida.
   const CONCURRENCY=25;
   let done=0;
 
@@ -2533,9 +2545,24 @@ async function syncImportedTransactionsBulk(ids,onProgress){
         updatedBy:uid
       };
       const ref=realtimeDb.ref('fintrack/transactions').child(key);
-      await ref.set(payload); // a Promise só resolve após confirmação do servidor
+      let remoteWinner=null;
+      const result=await ref.transaction(current=>{
+        if(current&&Number(current.clientUpdatedAt||0)>clientUpdatedAt){remoteWinner=current;return;}
+        return payload;
+      },undefined,false);
+      if(!result.committed){
+        const remote=remoteWinner||result.snapshot?.val?.()||(await ref.once('value')).val();
+        if(remote){
+          _cloudTxMap[key]=remote;
+          const idx=_db.transactions.findIndex(x=>String(x.id)===String(id));
+          if(idx>=0)_db.transactions[idx]=remote;
+          _suppressAutoSync=true;try{await saveDB(_db)}finally{_suppressAutoSync=false}
+          logCloud('⚠ Importação preservou versão mais nova existente no Firebase: '+key);
+        }
+      }else{
+        _cloudTxMap[key]=result.snapshot.val();
+      }
       _localDirtyIds.delete(id);
-      _cloudTxMap[key]={...tx,id:String(tx.id),firebaseKey:key,clientUpdatedAt,updatedBy:uid};
     }));
 
     done=Math.min(i+chunk.length,unique.length);
@@ -2575,7 +2602,10 @@ async function confirmImport(){
     const db=loadDB(),existingIds=new Set(db.transactions.map(t=>String(t.id)));
     let added=0,dupes=0,addedIds=[];
     for(const src of pendingImport){
-      const t={...src,owner:importOwner,clientUpdatedAt:Date.now()+added};
+      const base=`${importOwner}_${src._importFingerprint||`${src.type}_${src.date}_${src.amount}_${src.category}_${src.description}`}_${src._importOccurrence||1}`;
+      const deterministicId='imp_tx_'+simpleHash(base);
+      const t={...src,id:deterministicId,owner:importOwner,clientUpdatedAt:Date.now()+added};
+      delete t._importFingerprint;delete t._importOccurrence;
       if(existingIds.has(String(t.id))){
         if(skipDup){dupes++;continue}
         t.id=generateTransactionId();
@@ -2792,6 +2822,12 @@ async function syncToCloud(showFeedback=false){
   if(!auth?.currentUser||!realtimeDb)throw new Error('Usuário não autenticado.');
   const uid=auth.currentUser.uid;
   try{
+    // Quando o usuário clica em "Enviar tudo", todos os registros locais são
+    // revalidados contra o Firebase — não apenas os IDs já marcados como pendentes.
+    if(showFeedback){
+      (_db.transactions||[]).forEach(t=>{if(t?.id!=null)_localDirtyIds.add(String(t.id))});
+      logCloud('⏳ Conferindo '+_localDirtyIds.size+' transação(ões) locais antes do envio completo...');
+    }
     // Uma única rotina grava/exclui transações e confirma cada registro no servidor.
     await syncTransactionsToCloud(showFeedback);
 
@@ -2833,6 +2869,13 @@ async function migrateLegacyCloudIfNeeded(data){
     imports:data.imports
   };
 }
+
+function parseCloudJson(value,fallback){
+  if(value==null)return fallback;
+  if(typeof value==='string'){try{return JSON.parse(value)}catch{return fallback}}
+  return value;
+}
+
 function remoteSemanticSignature(map){
   // Assinatura estável: ignora metadados voláteis do Firebase e só considera dados de negócio.
   const clean=Object.entries(map||{}).sort(([a],[b])=>a.localeCompare(b)).map(([key,t])=>{
@@ -2935,9 +2978,9 @@ async function syncFromCloud(showFeedback=false){
     _localDeletedIds.clear();
     pendingDirty.forEach(id=>_localDirtyIds.add(id));
     pendingDeleted.forEach(id=>_localDeletedIds.add(id));
-    if(data.categories)await saveCats(JSON.parse(data.categories));
-    else if(data.cats)await saveCats(JSON.parse(data.cats));
-    if(data.imports)await saveImports(JSON.parse(data.imports));
+    if(data.categories)await saveCats(parseCloudJson(data.categories,_cats));
+    else if(data.cats)await saveCats(parseCloudJson(data.cats,_cats));
+    if(data.imports)await saveImports(parseCloudJson(data.imports,_imports));
     _suppressAutoSync=false;
 
     attachTransactionsListener();
