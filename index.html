@@ -650,22 +650,37 @@ body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min
 
 <!-- EXPORTAR -->
 <section id="sec-exportar" class="section">
-  <div class="page-header"><div><div class="page-title">Exportar Excel</div><div class="page-sub">Baixe seus dados em formato .xlsx</div></div></div>
-  <div class="chart-card" style="margin-bottom:18px">
-    <div style="font-size:14px;font-weight:500;margin-bottom:16px">Filtros de exportação</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px">
-      <div><div class="form-label">De quem</div><select class="form-select" id="exp-owner" onchange="renderExportSection()"><option value="ambos">Ambos</option><option value="thiago">Thiago</option><option value="luiza">Luiza</option></select></div>
-      <div><div class="form-label">Mês</div><select class="form-select" id="exp-month"><option value="-1">Todos os meses</option></select></div>
-      <div><div class="form-label">Ano</div><select class="form-select" id="exp-year"></select></div>
-      <div><div class="form-label">Tipo</div><select class="form-select" id="exp-type"><option value="all">Todos</option><option value="expense">Apenas Despesas</option><option value="income">Apenas Receitas</option></select></div>
-      <div><div class="form-label">Categoria</div><select class="form-select" id="exp-cat"><option value="all">Todas</option></select></div>
-    </div>
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <button class="btn btn-primary" onclick="exportExcel()" style="font-size:13px;padding:9px 20px">📥 Baixar Excel</button>
-      <span id="exp-preview-count" style="font-size:12px;color:var(--text2)">—</span>
+  <div class="page-header">
+    <div>
+      <div class="page-title">Exportar Excel</div>
+      <div class="page-sub">Exporte todo o histórico, separado por pessoa</div>
     </div>
   </div>
-  <div class="chart-card"><div style="font-size:14px;font-weight:500;margin-bottom:14px">Prévia</div><div class="import-table-wrap" style="max-height:380px"><table class="import-table"><thead><tr><th>Data</th><th>Tipo</th><th>Dono</th><th>Categoria</th><th>Valor</th><th>Descrição</th></tr></thead><tbody id="exp-preview-tbody"></tbody></table></div></div>
+  <div class="chart-card" style="margin-bottom:18px">
+    <div style="font-size:14px;font-weight:500;margin-bottom:6px">Exportação completa</div>
+    <div style="font-size:12.5px;color:var(--text2);margin-bottom:18px">A exportação inclui todas as receitas e despesas de todos os meses e anos. Escolha apenas de quem deseja baixar a planilha.</div>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(220px,1fr));gap:14px" id="export-owner-cards">
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:18px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+          <div><div style="font-size:14px;font-weight:600">Thiago</div><div id="exp-thiago-count" style="font-size:12px;color:var(--text2);margin-top:2px">—</div></div>
+          <span style="font-size:24px">👤</span>
+        </div>
+        <button class="btn btn-primary" onclick="exportExcel('thiago')" style="width:100%;justify-content:center;font-size:13px;padding:10px 16px">📥 Exportar toda a planilha</button>
+      </div>
+      <div style="background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:18px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px">
+          <div><div style="font-size:14px;font-weight:600">Luiza</div><div id="exp-luiza-count" style="font-size:12px;color:var(--text2);margin-top:2px">—</div></div>
+          <span style="font-size:24px">👤</span>
+        </div>
+        <button class="btn btn-primary" onclick="exportExcel('luiza')" style="width:100%;justify-content:center;font-size:13px;padding:10px 16px">📥 Exportar toda a planilha</button>
+      </div>
+    </div>
+  </div>
+  <div class="chart-card">
+    <div style="font-size:13px;color:var(--text2);line-height:1.7">
+      O arquivo gerado contém o histórico completo da pessoa selecionada, incluindo data, tipo, informações de compartilhamento, categoria, valor, descrição, mês e ano. Nenhum filtro de período, tipo ou categoria é aplicado.
+    </div>
+  </div>
 </section>
 
 <!-- PATRIMÔNIO -->
@@ -2895,49 +2910,82 @@ function renderImportHistory(){
 
 // ===================== EXPORT =====================
 function renderExportSection(){
-  populateMonthSelect('exp-month',new Date().getMonth());populateYearSelect('exp-year',new Date().getFullYear());
-  const sel=document.getElementById('exp-cat');
-  sel.innerHTML='<option value="all">Todas</option>'+allCats().map(c=>`<option value="${c.id}">${c.icon} ${c.name}</option>`).join('');
-  if(document.getElementById('exp-owner')&&!document.getElementById('exp-owner')._init){document.getElementById('exp-owner')._init=true}
-  updateExportPreview();
-  ['exp-month','exp-year','exp-type','exp-cat','exp-owner'].forEach(id=>{const el=document.getElementById(id);if(el)el.onchange=updateExportPreview});
-}
-function getExportTxs(){
-  const month=parseInt(document.getElementById('exp-month')?.value??-1);
-  const year=parseInt(document.getElementById('exp-year')?.value??new Date().getFullYear());
-  const type=document.getElementById('exp-type')?.value||'all';
-  const catId=document.getElementById('exp-cat')?.value||'all';
-  const owner=document.getElementById('exp-owner')?.value||'ambos';
   const db=loadDB();
-  let txs=month===-1?db.transactions.filter(t=>new Date(t.date+'T12:00').getFullYear()===year):filterTx(db.transactions,month,year);
-  if(type!=='all')txs=txs.filter(t=>t.type===type);
-  if(catId!=='all')txs=txs.filter(t=>t.category===catId);
-  if(owner!=='ambos')txs=txs.filter(t=>t.owner===owner);
-  return txs;
+  ['thiago','luiza'].forEach(owner=>{
+    const txs=(db.transactions||[]).filter(t=>t.owner===owner);
+    const el=document.getElementById('exp-'+owner+'-count');
+    if(el){
+      const inc=txs.filter(t=>t.type==='income').length;
+      const exp=txs.filter(t=>t.type==='expense').length;
+      el.textContent=`${txs.length} lançamento(s) · ${inc} receita(s) · ${exp} despesa(s)`;
+    }
+  });
 }
-function updateExportPreview(){
-  const txs=getExportTxs();
-  const cnt=document.getElementById('exp-preview-count');if(cnt)cnt.textContent=txs.length+' transação(ões)';
-  const tb=document.getElementById('exp-preview-tbody');if(!tb)return;
-  if(!txs.length){tb.innerHTML='<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text3)">Sem transações no período</td></tr>';return}
-  tb.innerHTML=txs.slice(0,50).map(t=>{const c=getCat(t.category),d=new Date(t.date+'T12:00'),color=t.type==='income'?'var(--green)':'var(--red)',sign=t.type==='income'?'+':'-';const ownerLbl=profileName(t.owner)+(t.shared?' (🤝'+t.splitPct+'%)':'');return`<tr><td>${d.toLocaleDateString('pt-BR')}</td><td style="color:${color}">${t.type==='income'?'Receita':'Despesa'}</td><td>${ownerLbl}</td><td>${c.icon} ${c.name}</td><td style="color:${color};font-family:DM Mono">${sign} ${fmt(t.amount)}</td><td>${t.description}</td></tr>`}).join('')+(txs.length>50?`<tr><td colspan="6" style="text-align:center;padding:8px;color:var(--text3);font-size:12px">... e mais ${txs.length-50} transações</td></tr>`:'');
+function getExportTxs(owner){
+  if(owner!=='thiago'&&owner!=='luiza')return[];
+  return (loadDB().transactions||[])
+    .filter(t=>t.owner===owner)
+    .slice()
+    .sort((a,b)=>new Date(a.date+'T12:00')-new Date(b.date+'T12:00'));
 }
-function exportExcel(){
-  const txs=getExportTxs();if(!txs.length){alert('Nenhuma transação para exportar.');return}
+function exportExcel(owner){
+  if(owner!=='thiago'&&owner!=='luiza'){alert('Selecione Thiago ou Luiza para exportar.');return}
+  const txs=getExportTxs(owner);
+  if(!txs.length){alert('Não há transações de '+profileName(owner)+' para exportar.');return}
+
   const rows=[['Data','Tipo','Dono','Compartilhado','% desta parte','Total original (se compartilhado)','Departamento','Valor','Descrição','Mês','Ano']];
-  txs.forEach(t=>{const d=new Date(t.date+'T12:00'),c=getCat(t.category);rows.push([t.date,t.type==='income'?'Recebido':'Gasto',profileName(t.owner),t.shared?'Sim':'Não',t.shared?t.splitPct:'',t.shared?t.sharedTotal:'',c.name,t.type==='expense'?-t.amount:t.amount,t.description,d.getMonth()+1,d.getFullYear()])});
-  const wb=XLSX.utils.book_new(),ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols']=[{wch:12},{wch:10},{wch:10},{wch:12},{wch:12},{wch:16},{wch:20},{wch:12},{wch:30},{wch:6},{wch:6}];
+  txs.forEach(t=>{
+    const d=new Date(t.date+'T12:00'),c=getCat(t.category);
+    rows.push([
+      t.date,
+      t.type==='income'?'Recebido':'Gasto',
+      profileName(t.owner),
+      t.shared?'Sim':'Não',
+      t.shared?t.splitPct:'',
+      t.shared?t.sharedTotal:'',
+      c.name,
+      t.type==='expense'?-Math.abs(Number(t.amount)||0):(Number(t.amount)||0),
+      t.description||'',
+      d.getMonth()+1,
+      d.getFullYear()
+    ]);
+  });
+
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.aoa_to_sheet(rows);
+  ws['!cols']=[{wch:12},{wch:11},{wch:10},{wch:14},{wch:13},{wch:20},{wch:22},{wch:14},{wch:34},{wch:7},{wch:7}];
   const range=XLSX.utils.decode_range(ws['!ref']);
-  for(let r=1;r<=range.e.r;r++){const dc2=ws[XLSX.utils.encode_cell({r,c:0})];if(dc2)dc2.z='DD/MM/YYYY';const vc=ws[XLSX.utils.encode_cell({r,c:7})];if(vc){vc.t='n';vc.z='#,##0.00'}}
-  XLSX.utils.book_append_sheet(wb,ws,'Gastos');
-  const year=parseInt(document.getElementById('exp-year')?.value??new Date().getFullYear());
-  const sRows=[['Mês','Receitas','Despesas','Saldo']];
-  MONTHS.forEach((name,m)=>{const mt=filterTx(txs,m,year);const inc=mt.filter(t=>t.type==='income').reduce((s,t)=>s+t.amount,0);const exp=mt.filter(t=>t.type==='expense').reduce((s,t)=>s+t.amount,0);if(inc||exp)sRows.push([name,inc,-exp,inc-exp])});
-  if(sRows.length>1){const ws2=XLSX.utils.aoa_to_sheet(sRows);ws2['!cols']=[{wch:14},{wch:14},{wch:14},{wch:14}];XLSX.utils.book_append_sheet(wb,ws2,'Resumo Mensal')}
-  const month=parseInt(document.getElementById('exp-month')?.value??-1);
-  const ownerLbl=document.getElementById('exp-owner')?.value||'ambos';
-  XLSX.writeFile(wb,`FinTrack_${ownerLbl}_${year}_${month===-1?'Anual':MONTHS_SHORT[month]}.xlsx`);
+  for(let r=1;r<=range.e.r;r++){
+    const vc=ws[XLSX.utils.encode_cell({r,c:7})];
+    if(vc){vc.t='n';vc.z='#,##0.00'}
+  }
+  XLSX.utils.book_append_sheet(wb,ws,'Transações');
+
+  const byMonth=new Map();
+  txs.forEach(t=>{
+    const d=new Date(t.date+'T12:00');
+    const key=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+    if(!byMonth.has(key))byMonth.set(key,{year:d.getFullYear(),month:d.getMonth(),income:0,expense:0,count:0});
+    const x=byMonth.get(key);x.count++;
+    if(t.type==='income')x.income+=Number(t.amount)||0;
+    else x.expense+=Math.abs(Number(t.amount)||0);
+  });
+  const summaryRows=[['Ano','Mês','Receitas','Despesas','Saldo','Qtd.']];
+  [...byMonth.values()].sort((a,b)=>a.year-b.year||a.month-b.month).forEach(x=>{
+    summaryRows.push([x.year,MONTHS[x.month],x.income,-x.expense,x.income-x.expense,x.count]);
+  });
+  const ws2=XLSX.utils.aoa_to_sheet(summaryRows);
+  ws2['!cols']=[{wch:8},{wch:14},{wch:16},{wch:16},{wch:16},{wch:8}];
+  if(ws2['!ref']){
+    const r2=XLSX.utils.decode_range(ws2['!ref']);
+    for(let r=1;r<=r2.e.r;r++)for(const c of [2,3,4]){const cell=ws2[XLSX.utils.encode_cell({r,c})];if(cell){cell.t='n';cell.z='#,##0.00'}}
+  }
+  XLSX.utils.book_append_sheet(wb,ws2,'Resumo Mensal');
+
+  const years=[...new Set(txs.map(t=>new Date(t.date+'T12:00').getFullYear()))].sort((a,b)=>a-b);
+  const firstYear=years[0],lastYear=years[years.length-1];
+  const period=firstYear===lastYear?String(firstYear):`${firstYear}-${lastYear}`;
+  XLSX.writeFile(wb,`FinTrack_${profileName(owner)}_Completo_${period}.xlsx`);
 }
 
 // ===================== CAT MANAGER =====================
