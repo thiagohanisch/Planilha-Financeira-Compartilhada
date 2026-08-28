@@ -1979,17 +1979,72 @@ async function delTx(id){
   const db=loadDB();
   const t=db.transactions.find(x=>x.id===id);
   if(!t)return;
-  let idsToDelete=[id];
-  if(t.shared&&t.groupId){
-    const alsoDeletePartner=confirm('Esta transação é compartilhada. Deseja excluir também a parte de '+profileName(otherProfile(t.owner))+'?\n\nOK = excluir os dois lados\nCancelar = excluir só a sua parte');
-    if(alsoDeletePartner){
-      idsToDelete=db.transactions.filter(x=>x.groupId===t.groupId).map(x=>x.id);
+
+  let idsToDelete=[];
+
+  // Parcelamentos: permite excluir o conjunto inteiro com um único comando.
+  // Em parcelamentos compartilhados, todas as partes dos dois perfis usam o mesmo parcelaGroup,
+  // portanto a exclusão completa remove todas as parcelas vinculadas de Thiago e Luiza.
+  if(t.parcelaGroup){
+    const linked=db.transactions.filter(x=>x.parcelaGroup===t.parcelaGroup);
+    const parcelaTotal=t.parcelaTotal||Math.max(...linked.map(x=>Number(x.parcelaNum)||0),linked.length);
+    const owners=new Set(linked.map(x=>x.owner).filter(Boolean));
+    const sharedLabel=owners.size>1?' dos dois perfis':'';
+    const deleteAll=confirm(
+      'Este lançamento faz parte de um pagamento parcelado'+(t.shared?' e compartilhado':'')+'.\n\n'+
+      'Deseja excluir TODAS as '+parcelaTotal+' parcelas vinculadas'+sharedLabel+'?\n\n'+
+      'OK = excluir todo o parcelamento\nCancelar = escolher uma exclusão menor'
+    );
+    if(deleteAll){
+      idsToDelete=linked.map(x=>x.id);
+    }else if(t.shared&&t.groupId){
+      const deleteInstallmentBoth=confirm(
+        'Deseja excluir somente esta parcela, mas dos dois lados do compartilhamento?\n\n'+
+        'OK = excluir esta parcela dos dois perfis\nCancelar = excluir somente este registro'
+      );
+      idsToDelete=deleteInstallmentBoth
+        ?db.transactions.filter(x=>x.groupId===t.groupId).map(x=>x.id)
+        :[id];
+    }else{
+      if(!confirm('Excluir somente esta parcela?'))return;
+      idsToDelete=[id];
     }
-  } else {
-    if(!confirm('Excluir esta transação?'))return;
   }
+  // Compartilhamento simples: mantém a opção de apagar os dois lados de uma vez.
+  else if(t.shared&&t.groupId){
+    const linked=db.transactions.filter(x=>x.groupId===t.groupId);
+    const alsoDeletePartner=confirm(
+      'Esta transação é compartilhada. Deseja excluir TODOS os registros vinculados a este gasto?\n\n'+
+      'OK = excluir os dois lados ('+linked.length+' registro(s))\nCancelar = excluir só este registro'
+    );
+    idsToDelete=alsoDeletePartner?linked.map(x=>x.id):[id];
+  }
+  // Recorrências também são registros vinculados; oferece a mesma conveniência sem alterar
+  // o comportamento normal de lançamentos avulsos.
+  else if(t.recurring&&t.recurringGroup){
+    const linked=db.transactions.filter(x=>x.recurringGroup===t.recurringGroup);
+    const deleteAll=confirm(
+      'Este lançamento faz parte de uma recorrência mensal.\n\n'+
+      'Deseja excluir TODOS os '+linked.length+' registros vinculados?\n\n'+
+      'OK = excluir toda a recorrência\nCancelar = excluir somente este registro'
+    );
+    idsToDelete=deleteAll?linked.map(x=>x.id):[id];
+  }
+  else{
+    if(!confirm('Excluir esta transação?'))return;
+    idsToDelete=[id];
+  }
+
+  if(!idsToDelete.length)return;
   db.transactions=db.transactions.filter(x=>!idsToDelete.includes(x.id));
-  await saveDBAndSync(db);populateAllSelects();refreshAll();
+  try{
+    await saveDBAndSync(db);
+    populateAllSelects();refreshAll();
+    logCloud('✓ '+idsToDelete.length+' registro(s) vinculado(s) excluído(s) e sincronizado(s).');
+  }catch(err){
+    populateAllSelects();refreshAll();
+    alert('Os registros foram removidos localmente, mas a exclusão ainda não foi confirmada no Firebase.\n\nDetalhes: '+err.message);
+  }
 }
 
 // ===================== DASHBOARD =====================
